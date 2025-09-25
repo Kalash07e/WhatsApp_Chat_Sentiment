@@ -1,0 +1,56 @@
+# WhatsApp Chat Sentiment Analysis - Requirements
+
+# Core Web Framework
+streamlit>=1.28.0
+
+# Data Processing
+pandas>=1.5.0
+numpy>=1.24.0
+
+# Data Visualization
+plotly>=5.15.0
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Natural Language Processing
+textblob>=0.17.0
+vaderSentiment>=3.3.0
+wordcloud>=1.9.0
+nltk>=3.8.0
+
+# Machine Learning
+scikit-learn>=1.3.0
+
+# PDF Generation
+fpdf2>=2.7.0
+
+# AI Integration
+google-generativeai>=0.3.0
+
+# Optional Advanced Features
+networkx>=3.0
+langdetect>=1.0.9
+
+# Optional ML Libraries (uncomment if needed)
+# transformers>=4.30.0
+# spacy>=3.6.0
+# torch>=2.0.0
+
+# Development Dependencies (optional)
+# pytest>=7.4.0
+# black>=23.7.0
+# flake8>=6.0.0
+# spacy>=3.6.0
+
+# Optional network analysis (uncomment if needed)
+# networkx>=3.1.0
+
+# Optional language detection (uncomment if needed)
+# langdetect>=1.0.9
+
+# Development dependencies (for testing)
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.5.0
