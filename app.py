@@ -17,6 +17,7 @@ import time
 import subprocess
 import sys
 import os
+import json
 
 import pandas as pd
 import numpy as np
@@ -32,6 +33,13 @@ import streamlit as st
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 from fpdf import FPDF
+
+# Import authentication system
+from auth import (
+    is_user_logged_in, create_login_form, create_user_dashboard, 
+    show_user_profile, get_all_users, is_admin_user, configure_admin_access, ADMIN_EMAILS, USER_DB_FILE
+)
+
 try:
     import google.generativeai as genai
 except Exception:
@@ -1297,15 +1305,299 @@ def generate_pdf_report(df, ai_report, insights_text):
 # -----------------------------------------------------------------------------
 # 4. MAIN APP LOGIC
 # -----------------------------------------------------------------------------
+def show_admin_panel():
+    """Enhanced admin panel with professional styling and admin controls"""
+    
+    # Professional admin header
+    st.markdown("""
+    <div style="
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 25px;
+        border-radius: 15px;
+        text-align: center;
+        margin: 20px 0;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    ">
+        <div style="font-size: 2.5rem; margin-bottom: 10px;">👨‍💼</div>
+        <h1 style="color: white; margin: 0; font-size: 2rem;">Admin Dashboard</h1>
+        <p style="color: rgba(255,255,255,0.8); margin: 10px 0 0 0; font-size: 1.1rem;">
+            User Management & System Overview
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Admin info
+    current_admin = st.session_state.user_email
+    st.markdown(f"""
+    <div style="
+        background: rgba(102, 126, 234, 0.1);
+        border-left: 4px solid #667eea;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+    ">
+        <strong>� Admin Session:</strong> {current_admin}<br>
+        <strong>🕒 Access Time:</strong> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    users_db = get_all_users()
+    
+    if not users_db:
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #74b9ff, #0984e3);
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            color: white;
+        ">
+            <div style="font-size: 3rem; margin-bottom: 15px;">👥</div>
+            <h3>No Users Registered Yet</h3>
+            <p>The system is ready to accept user registrations.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+    
+    # User statistics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #4CAF50, #66BB6A);
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            color: white;
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+        ">
+            <div style="font-size: 2rem; margin-bottom: 10px;">👥</div>
+            <div style="font-size: 1.8rem; font-weight: bold;">{len(users_db)}</div>
+            <div style="opacity: 0.9;">Total Users</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        # Calculate active users (logged in recently)
+        active_users = sum(1 for user in users_db.values() if user.get('login_count', 0) > 0)
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #2196F3, #42A5F5);
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            color: white;
+            box-shadow: 0 4px 15px rgba(33, 150, 243, 0.3);
+        ">
+            <div style="font-size: 2rem; margin-bottom: 10px;">🔥</div>
+            <div style="font-size: 1.8rem; font-weight: bold;">{active_users}</div>
+            <div style="opacity: 0.9;">Active Users</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        # Calculate today's registrations
+        today = datetime.datetime.now().strftime('%Y-%m-%d')
+        today_registrations = sum(1 for user in users_db.values() 
+                                 if user.get('registration_date', '').startswith(today))
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #FF9800, #FFB74D);
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            color: white;
+            box-shadow: 0 4px 15px rgba(255, 152, 0, 0.3);
+        ">
+            <div style="font-size: 2rem; margin-bottom: 10px;">📅</div>
+            <div style="font-size: 1.8rem; font-weight: bold;">{today_registrations}</div>
+            <div style="opacity: 0.9;">Today's Signups</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        # Calculate total login count
+        total_logins = sum(user.get('login_count', 0) for user in users_db.values())
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #9C27B0, #BA68C8);
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            color: white;
+            box-shadow: 0 4px 15px rgba(156, 39, 176, 0.3);
+        ">
+            <div style="font-size: 2rem; margin-bottom: 10px;">📊</div>
+            <div style="font-size: 1.8rem; font-weight: bold;">{total_logins}</div>
+            <div style="opacity: 0.9;">Total Logins</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Create enhanced user data
+    users_data = []
+    for email, info in users_db.items():
+        users_data.append({
+            "Email": email,
+            "Full Name": info.get("full_name", "N/A"),
+            "Registration Date": info.get("registration_date", "N/A"),
+            "Last Login": info.get("last_login", "Never"),
+            "Login Count": info.get("login_count", 0),
+            "Status": "Active" if info.get("login_count", 0) > 0 else "Registered"
+        })
+    
+    users_df = pd.DataFrame(users_data)
+    
+    # User management section
+    st.markdown("### 📊 **User Management**")
+    
+    # Search and filter options
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        search_term = st.text_input("🔍 Search Users", placeholder="Search by email or name...")
+    with col2:
+        status_filter = st.selectbox("Status Filter", ["All", "Active", "Registered"])
+    
+    # Apply filters
+    filtered_df = users_df.copy()
+    if search_term:
+        filtered_df = filtered_df[
+            filtered_df['Email'].str.contains(search_term, case=False) |
+            filtered_df['Full Name'].str.contains(search_term, case=False)
+        ]
+    
+    if status_filter != "All":
+        filtered_df = filtered_df[filtered_df['Status'] == status_filter]
+    
+    # Display filtered users table with enhanced styling
+    st.markdown("#### 👥 **User List**")
+    st.dataframe(
+        filtered_df, 
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Email": st.column_config.TextColumn("📧 Email", width="medium"),
+            "Full Name": st.column_config.TextColumn("👤 Full Name", width="medium"),
+            "Registration Date": st.column_config.TextColumn("📅 Registration", width="medium"),
+            "Last Login": st.column_config.TextColumn("🕒 Last Login", width="medium"),
+            "Login Count": st.column_config.NumberColumn("📊 Logins", width="small"),
+            "Status": st.column_config.TextColumn("🔘 Status", width="small")
+        }
+    )
+    
+    # Admin actions
+    st.markdown("---")
+    st.markdown("### 🛠️ **Admin Actions**")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Download users data as CSV
+        csv_data = filtered_df.to_csv(index=False)
+        st.download_button(
+            label="📥 **Download User Data (CSV)**",
+            data=csv_data,
+            file_name=f"user_data_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            type="secondary",
+            use_container_width=True
+        )
+    
+    with col2:
+        # Export JSON data
+        json_data = json.dumps(users_db, indent=2)
+        st.download_button(
+            label="📥 **Download User Data (JSON)**",
+            data=json_data,
+            file_name=f"user_database_backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json",
+            type="secondary",
+            use_container_width=True
+        )
+    
+    with col3:
+        # System info
+        if st.button("🔧 **System Information**", use_container_width=True):
+            st.info(f"""
+            **System Status:**
+            - Database File: `{USER_DB_FILE}`
+            - Admin Users: {len([email for email in ADMIN_EMAILS if email.strip()])}
+            - Current Admin: {current_admin}
+            - Server Time: {datetime.datetime.now()}
+            """)
+    
+    # Security notice
+    st.markdown("""
+    <div style="
+        background: rgba(255, 193, 7, 0.1);
+        border-left: 4px solid #FFC107;
+        padding: 15px;
+        border-radius: 8px;
+        margin-top: 20px;
+    ">
+        <strong>🔒 Security Notice:</strong> This admin panel contains sensitive user information. 
+        Ensure you follow data privacy regulations and keep this information secure.
+    </div>
+    """, unsafe_allow_html=True)
+
 def main():
     load_css()
+    
+    # Check authentication status
+    if not is_user_logged_in():
+        create_login_form()
+        return
+    
+    # Show user dashboard if logged in
+    create_user_dashboard()
+    
+    # Show profile if requested
+    if st.session_state.get('show_profile', False):
+        show_user_profile()
+        return
+    
+    # Admin panel - secured access control
+    if not ADMIN_EMAILS or not any(email.strip() for email in ADMIN_EMAILS):
+        # No admin configured yet - show setup interface
+        if st.sidebar.checkbox("⚙️ Admin Setup (Owner Only)", key="admin_setup"):
+            configure_admin_access()
+            return
+    else:
+        # Admin access control
+        is_admin = is_admin_user(st.session_state.user_email)
+        if is_admin:
+            if st.sidebar.checkbox("👨‍💼 Admin Panel (View Users)", key="admin_panel"):
+                show_admin_panel()
+                return
+        elif st.sidebar.checkbox("👨‍💼 Admin Panel (Request Access)", key="admin_panel_unauthorized"):
+            st.markdown("""
+            <div style="
+                background: linear-gradient(135deg, #FF6B6B, #FF8E8E);
+                padding: 25px;
+                border-radius: 15px;
+                text-align: center;
+                margin: 20px 0;
+                box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);
+            ">
+                <div style="font-size: 3rem; margin-bottom: 15px;">🚫</div>
+                <h2 style="color: white; margin-bottom: 15px;">Access Denied</h2>
+                <p style="color: white; font-size: 1.1rem; line-height: 1.6;">
+                    Only authorized administrators can access the admin panel.<br>
+                    Contact the website owner if you need admin access.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.info(f"👤 **Your Email:** {st.session_state.user_email}")
+            st.info("📧 **Contact the website owner** to request admin privileges for your account.")
+            return
 
     with st.sidebar:
         st.image(get_image_as_base64(SIDEBAR_LOGO_SVG), width=50)
         st.header("🕵️‍♀️ Controls Panel")
         uploaded_file = st.file_uploader("Upload WhatsApp chat export (.txt)", type=["txt"])
-        
-
         
     st.markdown("""<div class="title-container"><div class="main-title">WhatsApp Chat Analysis</div><div class="sub-title">Analyze sentiment, threats, and activity patterns from your chat history.</div></div>""", unsafe_allow_html=True)
 

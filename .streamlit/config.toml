@@ -1,0 +1,20 @@
+[global]
+developmentMode = false
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+maxUploadSize = 10
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+primaryColor = "#58a6ff"
+backgroundColor = "#f8f9fa"
+secondaryBackgroundColor = "#e9ecef"
+textColor = "#333333"
+
+[logger]
+level = "info"
