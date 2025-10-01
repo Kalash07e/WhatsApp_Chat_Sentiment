@@ -1,11 +1,24 @@
 def get_gemini_api_key():
-    """Read the Gemini API key from the .gemini_api_key file in the project root."""
+    """Read the Gemini API key from Streamlit secrets or .gemini_api_key file."""
+    # Try Streamlit secrets first (for deployment)
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets') and 'GEMINI_API_KEY' in st.secrets:
+            return st.secrets['GEMINI_API_KEY']
+    except Exception:
+        pass
+    
+    # Fall back to local file (for development)
     key_path = os.path.join(os.path.dirname(__file__), ".gemini_api_key")
     try:
         with open(key_path, "r") as f:
-            return f.read().strip()
+            api_key = f.read().strip()
+            if api_key and api_key != "your_actual_gemini_api_key_here":
+                return api_key
     except Exception:
-        return None
+        pass
+    
+    return None
 import io
 import re
 import csv
@@ -349,7 +362,7 @@ def analyze_chat_for_threats_holistically(_df, api_key):
         return "API Key is required for this feature."
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         # Enhanced context preparation
         authors = list(_df['author'].unique())
@@ -432,9 +445,20 @@ def analyze_chat_for_threats_holistically(_df, api_key):
         return response.text
         
     except Exception as e:
-        if "quota" in str(e):
-            return "⚠️ AI Analysis Quota Exceeded - Please try again later or check your Google AI API quota."
-        return f"🚨 Enhanced AI Analysis Error: {str(e)}"
+        if "quota" in str(e).lower() or "429" in str(e):
+            return """⚠️ **Gemini API Quota Exceeded**
+
+Your free tier API quota (250 requests/day) has been exceeded. 
+
+**Options:**
+1. **Wait**: Quota resets in 24 hours
+2. **Upgrade**: Enable billing in Google Cloud Console for higher limits
+3. **Continue**: All other features work normally without threat detection
+
+The chat analysis will continue with all other features enabled."""
+        elif "404" in str(e) or "not found" in str(e).lower():
+            return "⚠️ AI model temporarily unavailable. Chat analysis continues with other features."
+        return f"🚨 AI Analysis Error: {str(e)[:200]}..."
 
 def create_sentiment_scale_visualization(positive_count, negative_count, neutral_count, df):
     """Create a professional sentiment scale with actual sentiment scores and enhanced styling"""
@@ -1303,6 +1327,627 @@ def generate_pdf_report(df, ai_report, insights_text):
     return bytes(pdf.output(dest='S'))
 
 # -----------------------------------------------------------------------------
+# CUSTOMIZABLE PDF REPORT SYSTEM
+# -----------------------------------------------------------------------------
+
+def save_chart_as_image(fig, filename, chart_type="plotly"):
+    """Convert charts to images for PDF embedding with fallback methods"""
+    import io
+    import base64
+    
+    try:
+        if chart_type == "plotly":
+            # Try multiple methods for Plotly figure conversion
+            try:
+                # Method 1: Try Kaleido (requires Chrome)
+                img_bytes = fig.to_image(format="png", width=800, height=600, scale=2)
+                return img_bytes
+            except Exception as kaleido_error:
+                if "Kaleido" in str(kaleido_error) or "Chrome" in str(kaleido_error):
+                    # Method 2: Use matplotlib backend for Plotly
+                    try:
+                        import matplotlib.pyplot as plt
+                        import numpy as np
+                        
+                        # Convert Plotly figure to matplotlib equivalent
+                        matplotlib_fig = convert_plotly_to_matplotlib(fig)
+                        if matplotlib_fig:
+                            img_buffer = io.BytesIO()
+                            matplotlib_fig.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight', 
+                                                 facecolor='white', edgecolor='none')
+                            img_buffer.seek(0)
+                            plt.close(matplotlib_fig)  # Clean up
+                            return img_buffer.getvalue()
+                    except Exception as plt_error:
+                        st.warning(f"Chart conversion fallback failed: {plt_error}")
+                        return None
+                else:
+                    raise kaleido_error
+                    
+        elif chart_type == "matplotlib":
+            # Convert Matplotlib figure to image
+            img_buffer = io.BytesIO()
+            fig.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight', 
+                       facecolor='white', edgecolor='none')
+            img_buffer.seek(0)
+            return img_buffer.getvalue()
+        else:
+            return None
+            
+    except Exception as e:
+        st.warning(f"Chart conversion failed: {e}")
+        return None
+
+def convert_plotly_to_matplotlib(plotly_fig):
+    """Convert simple Plotly figures to matplotlib equivalents"""
+    try:
+        import matplotlib.pyplot as plt
+        
+        # Get data from Plotly figure
+        data = plotly_fig.data
+        layout = plotly_fig.layout
+        
+        if not data:
+            return None
+        
+        # Create matplotlib figure
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Handle different chart types
+        for trace in data:
+            if hasattr(trace, 'type'):
+                if trace.type == 'bar':
+                    ax.bar(trace.x, trace.y, label=getattr(trace, 'name', ''))
+                elif trace.type == 'line' or trace.type == 'scatter':
+                    ax.plot(trace.x, trace.y, label=getattr(trace, 'name', ''), marker='o' if len(trace.x) < 20 else '')
+                elif trace.type == 'pie':
+                    ax.pie(trace.values, labels=trace.labels, autopct='%1.1f%%')
+                    ax.axis('equal')
+            else:
+                # Default to line plot
+                if hasattr(trace, 'x') and hasattr(trace, 'y'):
+                    ax.plot(trace.x, trace.y, label=getattr(trace, 'name', ''))
+        
+        # Set title and labels
+        if hasattr(layout, 'title') and layout.title:
+            title_text = layout.title.text if hasattr(layout.title, 'text') else str(layout.title)
+            ax.set_title(title_text)
+        
+        if hasattr(layout, 'xaxis') and layout.xaxis and hasattr(layout.xaxis, 'title'):
+            ax.set_xlabel(layout.xaxis.title.text if hasattr(layout.xaxis.title, 'text') else str(layout.xaxis.title))
+            
+        if hasattr(layout, 'yaxis') and layout.yaxis and hasattr(layout.yaxis, 'title'):
+            ax.set_ylabel(layout.yaxis.title.text if hasattr(layout.yaxis.title, 'text') else str(layout.yaxis.title))
+        
+        # Add legend if multiple traces
+        if len(data) > 1 and not any(trace.type == 'pie' for trace in data):
+            ax.legend()
+        
+        plt.tight_layout()
+        return fig
+        
+    except Exception as e:
+        st.warning(f"Plotly to matplotlib conversion failed: {e}")
+        return None
+
+def create_simple_user_activity_chart_matplotlib(df):
+    """Create user activity chart using pure matplotlib (Chrome-free)"""
+    if df.empty:
+        return None
+    
+    try:
+        import matplotlib.pyplot as plt
+        
+        user_counts = df[df['author'] != 'System']['author'].value_counts().head(8)
+        
+        if user_counts.empty:
+            return None
+        
+        # Create matplotlib pie chart
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        colors = plt.cm.Set3(np.linspace(0, 1, len(user_counts)))
+        wedges, texts, autotexts = ax.pie(
+            user_counts.values, 
+            labels=user_counts.index, 
+            autopct='%1.1f%%',
+            colors=colors,
+            startangle=90
+        )
+        
+        ax.set_title('User Activity Distribution', fontsize=16, fontweight='bold', pad=20)
+        
+        # Make percentage text more readable
+        for autotext in autotexts:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
+        
+        plt.tight_layout()
+        return fig
+        
+    except Exception as e:
+        st.warning(f"Error creating matplotlib chart: {e}")
+        return None
+
+def create_simple_sentiment_chart_matplotlib(df):
+    """Create sentiment timeline chart using pure matplotlib (Chrome-free)"""
+    if df.empty or 'datetime_parsed' not in df.columns:
+        return None
+    
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        
+        # Group by date and calculate daily sentiment
+        df['date'] = pd.to_datetime(df['datetime_parsed']).dt.date
+        daily_sentiment = df.groupby('date')['sentiment'].agg(['mean', 'count']).reset_index()
+        daily_sentiment = daily_sentiment[daily_sentiment['count'] >= 3]  # Only days with 3+ messages
+        
+        if daily_sentiment.empty:
+            return None
+        
+        # Create matplotlib line chart
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        ax.plot(daily_sentiment['date'], daily_sentiment['mean'], 
+               marker='o', linewidth=2, markersize=6, color='#4CAF50')
+        
+        ax.set_title('Daily Sentiment Trend', fontsize=16, fontweight='bold', pad=20)
+        ax.set_xlabel('Date', fontsize=12)
+        ax.set_ylabel('Average Sentiment', fontsize=12)
+        
+        # Format x-axis dates
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(daily_sentiment)//10)))
+        plt.xticks(rotation=45)
+        
+        # Add horizontal line at y=0
+        ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        
+        # Add grid
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        return fig
+        
+    except Exception as e:
+        st.warning(f"Error creating matplotlib sentiment chart: {e}")
+        return None
+
+def create_sentiment_chart_for_pdf(df):
+    """Create sentiment timeline chart optimized for PDF"""
+    if df.empty or 'datetime_parsed' not in df.columns:
+        return None
+    
+    # Group by date and calculate daily sentiment
+    df['date'] = pd.to_datetime(df['datetime_parsed']).dt.date
+    daily_sentiment = df.groupby('date')['sentiment'].agg(['mean', 'count']).reset_index()
+    daily_sentiment = daily_sentiment[daily_sentiment['count'] >= 3]  # Only days with 3+ messages
+    
+    if daily_sentiment.empty:
+        return None
+    
+    fig = px.line(
+        daily_sentiment,
+        x='date',
+        y='mean',
+        title='Daily Sentiment Trend',
+        labels={'mean': 'Average Sentiment', 'date': 'Date'},
+        color_discrete_sequence=['#4CAF50']
+    )
+    
+    fig.update_layout(
+        title_font_size=16,
+        template='plotly_white',
+        height=400,
+        width=800,
+        showlegend=False
+    )
+    
+    return fig
+
+def create_user_activity_chart_for_pdf(df):
+    """Create user activity pie chart optimized for PDF"""
+    if df.empty:
+        return None
+    
+    user_counts = df[df['author'] != 'System']['author'].value_counts().head(8)
+    
+    if user_counts.empty:
+        return None
+    
+    fig = px.pie(
+        values=user_counts.values,
+        names=user_counts.index,
+        title='User Activity Distribution',
+        color_discrete_sequence=px.colors.qualitative.Set3
+    )
+    
+    fig.update_layout(
+        title_font_size=16,
+        template='plotly_white',
+        height=400,
+        width=800,
+        showlegend=True
+    )
+    
+    return fig
+
+def create_wordcloud_for_pdf(df):
+    """Create word cloud optimized for PDF"""
+    if df.empty:
+        return None
+    
+    try:
+        # Combine all messages
+        text = ' '.join(df[df['author'] != 'System']['message'].fillna('').astype(str))
+        
+        if len(text.strip()) < 10:
+            return None
+        
+        # Create word cloud
+        wordcloud = WordCloud(
+            width=800, 
+            height=400, 
+            background_color='white',
+            colormap='viridis',
+            max_words=100,
+            stopwords=STOPWORDS
+        ).generate(text)
+        
+        # Create matplotlib figure
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.imshow(wordcloud, interpolation='bilinear')
+        ax.axis('off')
+        ax.set_title('Word Cloud Analysis', fontsize=16, fontweight='bold', pad=20)
+        
+        return fig
+    except Exception as e:
+        st.error(f"Error creating word cloud: {e}")
+        return None
+
+def generate_modular_pdf_report(df, ai_report, insights_text, selected_sections, user_selections=None):
+    """Generate customizable PDF report based on user selections"""
+    
+    # Create PDF
+    pdf = FPDF()
+    pdf.add_page()
+    
+    # Title Page
+    pdf.set_font("Arial", 'B', 20)
+    pdf.cell(0, 20, 'WhatsApp Chat Analysis Report', 0, 1, 'C')
+    pdf.ln(10)
+    
+    # Report metadata
+    pdf.set_font("Arial", '', 12)
+    pdf.cell(0, 10, f'Generated on: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', 0, 1, 'C')
+    pdf.cell(0, 10, f'Total Messages Analyzed: {len(df):,}', 0, 1, 'C')
+    pdf.ln(15)
+    
+    # Table of Contents
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, 'Table of Contents', 0, 1)
+    pdf.ln(5)
+    pdf.set_font("Arial", '', 12)
+    
+    toc_items = []
+    page_num = 2
+    
+    for section in selected_sections:
+        if selected_sections[section]:
+            toc_items.append((section, page_num))
+            page_num += 1
+    
+    for item, page in toc_items:
+        pdf.cell(0, 8, f'{item}...{page}', 0, 1)
+    
+    # Generate selected sections
+    if selected_sections.get('key_insights', False):
+        pdf.add_page()
+        add_key_insights_section(pdf, insights_text, df)
+    
+    if selected_sections.get('ai_threat', False):
+        pdf.add_page()
+        add_ai_threat_section(pdf, ai_report)
+    
+    if selected_sections.get('user_activity', False):
+        pdf.add_page()
+        add_user_activity_section(pdf, df)
+    
+    if selected_sections.get('sentiment_timeline', False):
+        pdf.add_page()
+        add_sentiment_timeline_section(pdf, df)
+    
+    if selected_sections.get('word_cloud', False):
+        pdf.add_page()
+        add_word_cloud_section(pdf, df)
+    
+    # Additional sections based on user selections
+    if user_selections:
+        if user_selections.get('emoji_analysis', False):
+            pdf.add_page()
+            add_emoji_analysis_section(pdf, df)
+        
+        if user_selections.get('detailed_stats', False):
+            pdf.add_page()
+            add_detailed_statistics_section(pdf, df)
+    
+    return bytes(pdf.output(dest='S'))
+
+def add_key_insights_section(pdf, insights_text, df):
+    """Add key insights section to PDF"""
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 12, 'Key Insights & Summary Metrics', 0, 1)
+    pdf.ln(5)
+    
+    # Basic statistics
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, 'Overview Statistics:', 0, 1)
+    pdf.set_font("Arial", '', 10)
+    
+    total_messages = len(df)
+    unique_users = len(df[df['author'] != 'System']['author'].unique())
+    avg_sentiment = df['sentiment'].mean()
+    
+    stats_text = f"""
+Total Messages: {total_messages:,}
+Unique Participants: {unique_users}
+Average Sentiment Score: {avg_sentiment:.3f}
+Date Range: {df['datetime'].iloc[0]} to {df['datetime'].iloc[-1]}
+
+Analysis Summary:
+{insights_text}
+    """
+    
+    cleaned_text = stats_text.encode('latin-1', 'ignore').decode('latin-1')
+    pdf.multi_cell(0, 6, cleaned_text)
+
+def add_ai_threat_section(pdf, ai_report):
+    """Add AI threat assessment section to PDF"""
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 12, 'AI-Powered Threat Assessment', 0, 1)
+    pdf.ln(5)
+    
+    pdf.set_font("Arial", '', 10)
+    cleaned_report = str(ai_report).encode('latin-1', 'ignore').decode('latin-1')
+    
+    # Limit the report length for PDF
+    if len(cleaned_report) > 2000:
+        cleaned_report = cleaned_report[:2000] + "\n\n[Report truncated for PDF display]"
+    
+    pdf.multi_cell(0, 5, cleaned_report)
+
+def add_user_activity_section(pdf, df):
+    """Add user activity section to PDF"""
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 12, 'User Activity Analysis', 0, 1)
+    pdf.ln(5)
+    
+    # User statistics
+    user_stats = df[df['author'] != 'System']['author'].value_counts().head(10)
+    
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, 'Top 10 Most Active Users:', 0, 1)
+    pdf.set_font("Arial", '', 10)
+    
+    for user, count in user_stats.items():
+        percentage = (count / len(df)) * 100
+        pdf.cell(0, 6, f'{user}: {count} messages ({percentage:.1f}%)', 0, 1)
+    
+    # Try to add chart using Chrome-free method
+    try:
+        # Use matplotlib-based chart instead of Plotly
+        chart_fig = create_simple_user_activity_chart_matplotlib(df)
+        if chart_fig:
+            img_data = save_chart_as_image(chart_fig, "user_activity.png", "matplotlib")
+            if img_data:
+                # Save temporarily and add to PDF
+                temp_path = "temp_user_activity.png"
+                with open(temp_path, 'wb') as f:
+                    f.write(img_data)
+                pdf.ln(10)
+                pdf.image(temp_path, x=10, y=None, w=190)
+                import os
+                os.remove(temp_path)  # Clean up
+                plt.close(chart_fig)  # Clean up matplotlib figure
+    except Exception as e:
+        pdf.ln(5)
+        pdf.cell(0, 6, f'[User activity chart included as text summary above]', 0, 1)
+
+def add_sentiment_timeline_section(pdf, df):
+    """Add sentiment timeline section to PDF"""
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 12, 'Sentiment Timeline Analysis', 0, 1)
+    pdf.ln(5)
+    
+    # Sentiment statistics
+    positive_msgs = len(df[df['sentiment'] > 0])
+    negative_msgs = len(df[df['sentiment'] < 0])
+    neutral_msgs = len(df[df['sentiment'] == 0])
+    
+    pdf.set_font("Arial", '', 10)
+    sentiment_text = f"""
+Sentiment Distribution:
+- Positive Messages: {positive_msgs} ({(positive_msgs/len(df)*100):.1f}%)
+- Negative Messages: {negative_msgs} ({(negative_msgs/len(df)*100):.1f}%)
+- Neutral Messages: {neutral_msgs} ({(neutral_msgs/len(df)*100):.1f}%)
+
+Average Sentiment Score: {df['sentiment'].mean():.3f}
+Most Positive Day: {df.loc[df['sentiment'].idxmax()]['datetime'] if not df.empty else 'N/A'}
+Most Negative Day: {df.loc[df['sentiment'].idxmin()]['datetime'] if not df.empty else 'N/A'}
+    """
+    
+    cleaned_text = sentiment_text.encode('latin-1', 'ignore').decode('latin-1')
+    pdf.multi_cell(0, 6, cleaned_text)
+    
+    # Try to add sentiment timeline chart using Chrome-free method
+    try:
+        chart_fig = create_simple_sentiment_chart_matplotlib(df)
+        if chart_fig:
+            img_data = save_chart_as_image(chart_fig, "sentiment_timeline.png", "matplotlib")
+            if img_data:
+                temp_path = "temp_sentiment_timeline.png"
+                with open(temp_path, 'wb') as f:
+                    f.write(img_data)
+                pdf.ln(5)
+                pdf.image(temp_path, x=10, y=None, w=190)
+                import os
+                os.remove(temp_path)  # Clean up
+                plt.close(chart_fig)  # Clean up matplotlib figure
+    except Exception as e:
+        pdf.ln(5)
+        pdf.cell(0, 6, f'[Sentiment timeline chart included as statistics above]', 0, 1)
+
+def add_word_cloud_section(pdf, df):
+    """Add word cloud section to PDF"""
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 12, 'Word Cloud Analysis', 0, 1)
+    pdf.ln(5)
+    
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 6, 'Most frequently used words in the conversation:', 0, 1)
+    pdf.ln(5)
+    
+    # Try to add word cloud
+    try:
+        wc_fig = create_wordcloud_for_pdf(df)
+        if wc_fig:
+            img_data = save_chart_as_image(wc_fig, "wordcloud.png", "matplotlib")
+            if img_data:
+                temp_path = "temp_wordcloud.png"
+                with open(temp_path, 'wb') as f:
+                    f.write(img_data)
+                pdf.image(temp_path, x=10, y=None, w=190)
+                import os
+                os.remove(temp_path)  # Clean up
+    except Exception as e:
+        pdf.cell(0, 6, f'[Word cloud could not be generated: {str(e)}]', 0, 1)
+
+def add_emoji_analysis_section(pdf, df):
+    """Add emoji analysis section to PDF"""
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 12, 'Emoji Usage Analysis', 0, 1)
+    pdf.ln(5)
+    
+    # Extract emojis
+    emoji_result = analyze_emoji_data(df)
+    if emoji_result is None:
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(0, 6, 'No emojis found in this conversation.', 0, 1)
+        return
+    
+    emoji_stats, emoji_df = emoji_result
+    
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 6, f'Total Emojis Used: {len(emoji_df)}', 0, 1)
+    pdf.cell(0, 6, f'Unique Emojis: {len(emoji_stats)}', 0, 1)
+    pdf.ln(5)
+    
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 8, 'Top 10 Most Used Emojis:', 0, 1)
+    pdf.set_font("Arial", '', 10)
+    
+    for i, row in emoji_stats.head(10).iterrows():
+        try:
+            pdf.cell(0, 6, f'{row["emoji"]} - {row["count"]} times (by {row["top_user"]})', 0, 1)
+        except:
+            pdf.cell(0, 6, f'[Emoji] - {row["count"]} times (by {row["top_user"]})', 0, 1)
+
+def add_detailed_statistics_section(pdf, df):
+    """Add detailed statistics section to PDF"""
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 12, 'Detailed Statistics', 0, 1)
+    pdf.ln(5)
+    
+    # Calculate detailed stats
+    user_df = df[df['author'] != 'System']
+    
+    if not user_df.empty:
+        total_words = user_df['message'].str.split().str.len().sum()
+        avg_words_per_msg = total_words / len(user_df)
+        
+        # Activity by hour
+        if 'datetime_parsed' in user_df.columns:
+            hourly_activity = pd.to_datetime(user_df['datetime_parsed']).dt.hour.value_counts().sort_index()
+            peak_hour = hourly_activity.idxmax()
+        else:
+            peak_hour = "Unknown"
+        
+        stats_text = f"""
+Message Statistics:
+- Total Words: {total_words:,}
+- Average Words per Message: {avg_words_per_msg:.1f}
+- Longest Message: {user_df['message'].str.len().max()} characters
+- Peak Activity Hour: {peak_hour}:00
+
+User Engagement:
+- Most Active User: {user_df['author'].value_counts().index[0]}
+- User with Highest Sentiment: {user_df.loc[user_df.groupby('author')['sentiment'].mean().idxmax()]}
+- Most Verbose User: {user_df.loc[user_df.groupby('author')['message'].apply(lambda x: x.str.len().mean()).idxmax()]}
+        """
+        
+        pdf.set_font("Arial", '', 10)
+        cleaned_text = stats_text.encode('latin-1', 'ignore').decode('latin-1')
+        pdf.multi_cell(0, 6, cleaned_text)
+
+def create_pdf_customization_ui():
+    """Create the PDF customization UI in the sidebar"""
+    with st.sidebar.expander("📄 Customize PDF Report", expanded=False):
+        st.markdown("**Select sections to include in your PDF report:**")
+        st.caption("✅ Chrome-free chart generation enabled")
+        
+        # Core sections
+        st.markdown("**📊 Core Analytics:**")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            key_insights = st.checkbox("📋 Key Insights", value=True, key="pdf_key_insights")
+            user_activity = st.checkbox("👥 User Activity", value=True, key="pdf_user_activity")
+            word_cloud = st.checkbox("☁️ Word Cloud", value=True, key="pdf_word_cloud")
+        
+        with col2:
+            ai_threat = st.checkbox("🤖 AI Threat Analysis", value=True, key="pdf_ai_threat")
+            sentiment_timeline = st.checkbox("📈 Sentiment Timeline", value=True, key="pdf_sentiment")
+            emoji_analysis = st.checkbox("😊 Emoji Analysis", value=False, key="pdf_emoji")
+        
+        # Additional options
+        st.markdown("**⚙️ Additional Options:**")
+        detailed_stats = st.checkbox("📊 Detailed Statistics", value=False, key="pdf_detailed_stats")
+        
+        # Report format options
+        st.markdown("**🎨 Report Options:**")
+        include_charts = st.checkbox("📊 Include Charts", value=True, key="pdf_include_charts", 
+                                   help="Charts will be generated using matplotlib (no Chrome required)")
+        compact_format = st.checkbox("📄 Compact Format", value=False, key="pdf_compact")
+        
+        selected_sections = {
+            'key_insights': key_insights,
+            'ai_threat': ai_threat,
+            'user_activity': user_activity,
+            'sentiment_timeline': sentiment_timeline,
+            'word_cloud': word_cloud
+        }
+        
+        user_selections = {
+            'emoji_analysis': emoji_analysis,
+            'detailed_stats': detailed_stats,
+            'include_charts': include_charts,
+            'compact_format': compact_format
+        }
+        
+        # Preview sections count
+        selected_count = sum(selected_sections.values()) + sum([emoji_analysis, detailed_stats])
+        
+        if selected_count > 0:
+            st.success(f"✅ {selected_count} sections selected")
+            if include_charts:
+                st.info("📊 Charts will be included using Chrome-free generation")
+        else:
+            st.warning("⚠️ Please select at least one section")
+        
+        return selected_sections, user_selections
+
+# -----------------------------------------------------------------------------
 # 4. MAIN APP LOGIC
 # -----------------------------------------------------------------------------
 def show_admin_panel():
@@ -1542,6 +2187,768 @@ def show_admin_panel():
     </div>
     """, unsafe_allow_html=True)
 
+# -----------------------------------------------------------------------------
+# EMOJI ANALYSIS DASHBOARD FUNCTIONS
+# -----------------------------------------------------------------------------
+
+def extract_emojis_from_text(text):
+    """Extract emojis from text using regex patterns"""
+    import re
+    # Unicode ranges for emojis
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+        "\U00002702-\U000027B0"  # miscellaneous symbols
+        "\U000024C2-\U0001F251"  # enclosed characters
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-a
+        "\U00002600-\U000026FF"  # miscellaneous symbols
+        "\U00002700-\U000027BF"  # dingbats
+        "]+", 
+        flags=re.UNICODE
+    )
+    return emoji_pattern.findall(text)
+
+def analyze_emoji_data(df):
+    """Comprehensive emoji analysis for the dashboard"""
+    if df.empty:
+        return None
+    
+    emoji_data = []
+    
+    for idx, row in df.iterrows():
+        if pd.isna(row['message']) or row['author'] == 'System':
+            continue
+            
+        emojis = extract_emojis_from_text(str(row['message']))
+        for emoji in emojis:
+            emoji_data.append({
+                'emoji': emoji,
+                'author': row['author'],
+                'sentiment': row.get('sentiment', 0),
+                'datetime': row.get('datetime_parsed', row.get('datetime'))
+            })
+    
+    if not emoji_data:
+        return None
+    
+    emoji_df = pd.DataFrame(emoji_data)
+    
+    # Calculate emoji statistics
+    emoji_stats = emoji_df.groupby('emoji').agg({
+        'emoji': 'count',
+        'author': lambda x: x.value_counts().index[0] if len(x) > 0 else 'Unknown',
+        'sentiment': 'mean'
+    }).rename(columns={'emoji': 'count', 'author': 'top_user'})
+    
+    emoji_stats = emoji_stats.sort_values('count', ascending=False).reset_index()
+    emoji_stats['sentiment'] = emoji_stats['sentiment'].round(3)
+    
+    return emoji_stats, emoji_df
+
+def create_emoji_cloud_visualization(emoji_stats):
+    """Create an emoji cloud visualization"""
+    if emoji_stats is None or emoji_stats.empty:
+        return None
+    
+    # Create a simple emoji cloud using matplotlib
+    fig, ax = plt.subplots(figsize=(12, 8))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 10)
+    ax.axis('off')
+    
+    # Position emojis based on frequency
+    top_emojis = emoji_stats.head(20)
+    
+    import random
+    random.seed(42)  # For consistent positioning
+    
+    for i, row in top_emojis.iterrows():
+        x = random.uniform(0.5, 9.5)
+        y = random.uniform(0.5, 9.5)
+        
+        # Size based on frequency (min 20, max 100)
+        size = 20 + (row['count'] / top_emojis['count'].max()) * 80
+        
+        ax.text(x, y, row['emoji'], fontsize=size, ha='center', va='center')
+    
+    ax.set_title('Emoji Cloud ☁️', fontsize=20, fontweight='bold', pad=20)
+    plt.tight_layout()
+    
+    return fig
+
+def display_emoji_analysis_dashboard(df):
+    """Main function to display the Interactive Emoji Analysis Dashboard"""
+    st.header("😊 Interactive Emoji Analysis Dashboard")
+    st.markdown("---")
+    
+    # Analyze emoji data
+    emoji_result = analyze_emoji_data(df)
+    
+    if emoji_result is None:
+        st.info("🤔 No emojis found in this chat! This conversation seems to be purely text-based.")
+        return
+    
+    emoji_stats, emoji_df = emoji_result
+    
+    # At-a-Glance Metrics Section
+    st.subheader("📊 At-a-Glance Metrics")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    total_emojis = len(emoji_df)
+    unique_emojis = len(emoji_stats)
+    most_used_emoji = emoji_stats.iloc[0]['emoji'] if not emoji_stats.empty else "N/A"
+    avg_sentiment = emoji_df['sentiment'].mean()
+    
+    with col1:
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-card-icon'>📈</div>
+            <div class='metric-card-label'>Total Emojis</div>
+            <div class='metric-card-value'>{total_emojis:,}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-card-icon'>🎯</div>
+            <div class='metric-card-label'>Unique Emojis</div>
+            <div class='metric-card-value'>{unique_emojis}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-card-icon'>👑</div>
+            <div class='metric-card-label'>Most Used</div>
+            <div class='metric-card-value' style='font-size: 2rem;'>{most_used_emoji}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        sentiment_color = "#4CAF50" if avg_sentiment > 0 else "#f44336" if avg_sentiment < 0 else "#FF9800"
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-card-icon'>💭</div>
+            <div class='metric-card-label'>Avg Sentiment</div>
+            <div class='metric-card-value' style='color: {sentiment_color};'>{avg_sentiment:.2f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Create two columns for better layout
+    col_left, col_right = st.columns([1, 1])
+    
+    with col_left:
+        # Top 5 Emoji Ranking
+        st.subheader("🏆 Top 5 Emoji Ranking")
+        
+        if len(emoji_stats) >= 5:
+            top_5 = emoji_stats.head(5)
+        else:
+            top_5 = emoji_stats
+        
+        for i, row in top_5.iterrows():
+            rank = i + 1
+            emoji = row['emoji']
+            count = row['count']
+            
+            # Medal emojis for top 3
+            if rank == 1:
+                medal = "🥇"
+            elif rank == 2:
+                medal = "🥈"
+            elif rank == 3:
+                medal = "🥉"
+            else:
+                medal = f"#{rank}"
+            
+            st.markdown(f"""
+            <div style='
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                padding: 15px;
+                border-radius: 10px;
+                margin: 10px 0;
+                color: white;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+            '>
+                <div style='display: flex; align-items: center; gap: 15px;'>
+                    <span style='font-size: 1.5rem;'>{medal}</span>
+                    <span style='font-size: 2rem;'>{emoji}</span>
+                    <span style='font-weight: bold;'>Used by: {row['top_user']}</span>
+                </div>
+                <div style='text-align: right;'>
+                    <div style='font-size: 1.8rem; font-weight: bold;'>{count}</div>
+                    <div style='font-size: 0.9rem; opacity: 0.8;'>times</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col_right:
+        # Interactive Emoji Frequency Chart
+        st.subheader("📊 Top 15 Emoji Frequency")
+        
+        top_15 = emoji_stats.head(15)
+        
+        if not top_15.empty:
+            fig = px.bar(
+                top_15,
+                x='count',
+                y='emoji',
+                orientation='h',
+                title="Most Frequently Used Emojis",
+                labels={'count': 'Frequency', 'emoji': 'Emoji'},
+                color='count',
+                color_continuous_scale='viridis',
+                hover_data=['top_user', 'sentiment']
+            )
+            
+            fig.update_layout(
+                height=500,
+                showlegend=False,
+                title_font_size=16,
+                yaxis={'categoryorder': 'total ascending'},
+                template='plotly_white'
+            )
+            
+            fig.update_traces(
+                texttemplate='%{x}',
+                textposition='outside',
+                hovertemplate='<b>%{y}</b><br>' +
+                            'Count: %{x}<br>' +
+                            'Top User: %{customdata[0]}<br>' +
+                            'Avg Sentiment: %{customdata[1]:.2f}<br>' +
+                            '<extra></extra>'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Detailed Emoji Data Table
+    st.subheader("📋 Detailed Emoji Data Table")
+    
+    # Add search functionality
+    search_emoji = st.text_input("🔍 Search for specific emoji:", placeholder="Type emoji or user name...")
+    
+    # Filter data based on search
+    display_stats = emoji_stats.copy()
+    if search_emoji:
+        mask = (
+            display_stats['emoji'].str.contains(search_emoji, case=False, na=False) |
+            display_stats['top_user'].str.contains(search_emoji, case=False, na=False)
+        )
+        display_stats = display_stats[mask]
+    
+    # Format the table for better display
+    display_stats_formatted = display_stats.copy()
+    display_stats_formatted.columns = ['Emoji', 'Frequency', 'Most Active User', 'Avg Sentiment']
+    display_stats_formatted['Avg Sentiment'] = display_stats_formatted['Avg Sentiment'].apply(lambda x: f"{x:.3f}")
+    
+    # Add sorting options
+    sort_options = ['Frequency (High to Low)', 'Frequency (Low to High)', 'Sentiment (Positive to Negative)', 'Sentiment (Negative to Positive)']
+    sort_choice = st.selectbox("Sort by:", sort_options)
+    
+    if sort_choice == 'Frequency (High to Low)':
+        display_stats_formatted = display_stats_formatted.sort_values('Frequency', ascending=False)
+    elif sort_choice == 'Frequency (Low to High)':
+        display_stats_formatted = display_stats_formatted.sort_values('Frequency', ascending=True)
+    elif sort_choice == 'Sentiment (Positive to Negative)':
+        display_stats_formatted = display_stats_formatted.sort_values('Avg Sentiment', ascending=False)
+    elif sort_choice == 'Sentiment (Negative to Positive)':
+        display_stats_formatted = display_stats_formatted.sort_values('Avg Sentiment', ascending=True)
+    
+    # Display the table
+    st.dataframe(
+        display_stats_formatted,
+        use_container_width=True,
+        height=400,
+        column_config={
+            "Emoji": st.column_config.TextColumn(
+                "Emoji",
+                help="The emoji character",
+                width="small"
+            ),
+            "Frequency": st.column_config.NumberColumn(
+                "Frequency",
+                help="Total number of times this emoji was used",
+                format="%d"
+            ),
+            "Most Active User": st.column_config.TextColumn(
+                "Most Active User",
+                help="User who used this emoji most often"
+            ),
+            "Avg Sentiment": st.column_config.TextColumn(
+                "Avg Sentiment",
+                help="Average sentiment of messages containing this emoji"
+            )
+        }
+    )
+    
+    # Show total results
+    st.caption(f"Showing {len(display_stats_formatted)} of {len(emoji_stats)} emojis")
+    
+    st.markdown("---")
+    
+    # Emoji Cloud Visualization
+    st.subheader("☁️ Emoji Cloud Visualization")
+    
+    emoji_cloud_fig = create_emoji_cloud_visualization(emoji_stats)
+    if emoji_cloud_fig:
+        st.pyplot(emoji_cloud_fig)
+        st.caption("Emoji size is proportional to frequency of use")
+    else:
+        st.info("Could not generate emoji cloud visualization")
+    
+    # Additional insights
+    st.markdown("---")
+    st.subheader("🔍 Quick Insights")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Emoji usage by user
+        st.write("**Top Emoji Users:**")
+        user_emoji_counts = emoji_df.groupby('author').size().sort_values(ascending=False).head(5)
+        for user, count in user_emoji_counts.items():
+            st.write(f"• {user}: {count} emojis")
+    
+    with col2:
+        # Sentiment analysis
+        st.write("**Emoji Sentiment Distribution:**")
+        positive_emojis = len(emoji_stats[emoji_stats['sentiment'] > 0])
+        negative_emojis = len(emoji_stats[emoji_stats['sentiment'] < 0])
+        neutral_emojis = len(emoji_stats[emoji_stats['sentiment'] == 0])
+        
+        st.write(f"• Positive: {positive_emojis} emojis")
+        st.write(f"• Negative: {negative_emojis} emojis")
+        st.write(f"• Neutral: {neutral_emojis} emojis")
+
+# -----------------------------------------------------------------------------
+# USER VS USER COMPARISON DASHBOARD FUNCTIONS
+# -----------------------------------------------------------------------------
+
+def get_user_statistics(df, username):
+    """Calculate comprehensive statistics for a specific user"""
+    user_df = df[df['author'] == username].copy()
+    
+    if user_df.empty:
+        return None
+    
+    # Basic stats
+    total_messages = len(user_df)
+    total_words = user_df['message'].str.split().str.len().sum()
+    avg_words_per_message = total_words / total_messages if total_messages > 0 else 0
+    
+    # Sentiment analysis
+    avg_sentiment = user_df['sentiment'].mean()
+    positive_messages = len(user_df[user_df['sentiment'] > 0])
+    negative_messages = len(user_df[user_df['sentiment'] < 0])
+    neutral_messages = len(user_df[user_df['sentiment'] == 0])
+    
+    # Extract emojis for this user
+    user_emojis = []
+    for message in user_df['message']:
+        if pd.notna(message):
+            emojis = extract_emojis_from_text(str(message))
+            user_emojis.extend(emojis)
+    
+    # Top 5 emojis
+    emoji_counts = Counter(user_emojis)
+    top_5_emojis = emoji_counts.most_common(5)
+    
+    # Top 5 words (excluding stop words)
+    stop_words = {'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'shall', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them', 'my', 'your', 'his', 'her', 'its', 'our', 'their', 'this', 'that', 'these', 'those', 'what', 'which', 'who', 'when', 'where', 'why', 'how', 'can', 'not', 'no', 'yes', 'ok', 'okay', 'hi', 'hello', 'bye', 'thanks', 'thank', 'please'}
+    
+    all_words = []
+    for message in user_df['message']:
+        if pd.notna(message):
+            words = str(message).lower().split()
+            # Remove punctuation and filter stop words
+            cleaned_words = [word.strip('.,!?";()[]{}') for word in words if len(word.strip('.,!?";()[]{}')) > 2]
+            filtered_words = [word for word in cleaned_words if word not in stop_words and word.isalpha()]
+            all_words.extend(filtered_words)
+    
+    word_counts = Counter(all_words)
+    top_5_words = word_counts.most_common(5)
+    
+    # Activity by hour
+    if 'datetime_parsed' in user_df.columns:
+        user_df['hour'] = pd.to_datetime(user_df['datetime_parsed']).dt.hour
+        hourly_activity = user_df['hour'].value_counts().sort_index()
+        # Ensure all hours are represented
+        full_hourly_activity = pd.Series(0, index=range(24))
+        full_hourly_activity.update(hourly_activity)
+    else:
+        full_hourly_activity = pd.Series(0, index=range(24))
+    
+    return {
+        'total_messages': total_messages,
+        'total_words': total_words,
+        'avg_words_per_message': avg_words_per_message,
+        'avg_sentiment': avg_sentiment,
+        'positive_messages': positive_messages,
+        'negative_messages': negative_messages,
+        'neutral_messages': neutral_messages,
+        'top_5_emojis': top_5_emojis,
+        'top_5_words': top_5_words,
+        'hourly_activity': full_hourly_activity,
+        'total_emojis': len(user_emojis)
+    }
+
+def create_activity_chart(hourly_activity, username, color):
+    """Create an activity chart for a user"""
+    fig = px.bar(
+        x=hourly_activity.index,
+        y=hourly_activity.values,
+        title=f"{username}'s Activity by Hour",
+        labels={'x': 'Hour of Day', 'y': 'Number of Messages'},
+        color_discrete_sequence=[color]
+    )
+    
+    fig.update_layout(
+        height=300,
+        showlegend=False,
+        title_font_size=14,
+        template='plotly_white',
+        xaxis=dict(tickmode='linear', tick0=0, dtick=2)
+    )
+    
+    fig.update_traces(
+        hovertemplate='Hour: %{x}:00<br>Messages: %{y}<extra></extra>'
+    )
+    
+    return fig
+
+def display_user_metrics_card(stats, username, color):
+    """Display user metrics in a styled card"""
+    if stats is None:
+        st.error(f"No data found for {username}")
+        return
+    
+    # Header with user name
+    st.markdown(f"""
+    <div style='
+        background: linear-gradient(135deg, {color} 0%, {color}80 100%);
+        padding: 20px;
+        border-radius: 15px;
+        margin-bottom: 20px;
+        color: white;
+        text-align: center;
+    '>
+        <h2 style='margin: 0; font-size: 1.8rem;'>👤 {username}</h2>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Core Statistics
+    st.subheader("📊 Core Statistics")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-card-icon'>💬</div>
+            <div class='metric-card-label'>Total Messages</div>
+            <div class='metric-card-value'>{stats['total_messages']:,}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-card-icon'>📝</div>
+            <div class='metric-card-label'>Avg Words/Message</div>
+            <div class='metric-card-value'>{stats['avg_words_per_message']:.1f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Sentiment Analysis
+    st.subheader("😊 Sentiment Analysis")
+    
+    sentiment_color = "#4CAF50" if stats['avg_sentiment'] > 0 else "#f44336" if stats['avg_sentiment'] < 0 else "#FF9800"
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-card-icon'>📈</div>
+            <div class='metric-card-label'>Avg Sentiment</div>
+            <div class='metric-card-value' style='color: {sentiment_color};'>{stats['avg_sentiment']:.3f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-card-icon'>😊</div>
+            <div class='metric-card-label'>Positive</div>
+            <div class='metric-card-value' style='color: #4CAF50;'>{stats['positive_messages']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-card-icon'>😔</div>
+            <div class='metric-card-label'>Negative</div>
+            <div class='metric-card-value' style='color: #f44336;'>{stats['negative_messages']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Communication Style
+    st.subheader("🎨 Communication Style")
+    
+    # Top 5 Emojis
+    st.write("**Top 5 Emojis:**")
+    if stats['top_5_emojis']:
+        for i, (emoji, count) in enumerate(stats['top_5_emojis'], 1):
+            st.write(f"{i}. {emoji} - {count} times")
+    else:
+        st.write("No emojis used")
+    
+    st.write("**Top 5 Words:**")
+    if stats['top_5_words']:
+        for i, (word, count) in enumerate(stats['top_5_words'], 1):
+            st.write(f"{i}. {word} - {count} times")
+    else:
+        st.write("No words found")
+    
+    # Activity Chart
+    st.subheader("⏰ Activity Pattern")
+    activity_chart = create_activity_chart(stats['hourly_activity'], username, color)
+    st.plotly_chart(activity_chart, use_container_width=True)
+
+def display_comparison_summary(stats1, stats2, user1, user2):
+    """Display a comparison summary between two users"""
+    st.subheader("🔍 Comparison Summary")
+    
+    # Message comparison
+    if stats1['total_messages'] > stats2['total_messages']:
+        msg_winner = user1
+        msg_diff = stats1['total_messages'] - stats2['total_messages']
+        msg_percent = (msg_diff / stats2['total_messages']) * 100 if stats2['total_messages'] > 0 else 0
+    elif stats2['total_messages'] > stats1['total_messages']:
+        msg_winner = user2
+        msg_diff = stats2['total_messages'] - stats1['total_messages']
+        msg_percent = (msg_diff / stats1['total_messages']) * 100 if stats1['total_messages'] > 0 else 0
+    else:
+        msg_winner = "Tie"
+        msg_diff = 0
+        msg_percent = 0
+    
+    # Sentiment comparison
+    if stats1['avg_sentiment'] > stats2['avg_sentiment']:
+        sentiment_winner = user1
+        sentiment_diff = stats1['avg_sentiment'] - stats2['avg_sentiment']
+    elif stats2['avg_sentiment'] > stats1['avg_sentiment']:
+        sentiment_winner = user2
+        sentiment_diff = stats2['avg_sentiment'] - stats1['avg_sentiment']
+    else:
+        sentiment_winner = "Tie"
+        sentiment_diff = 0
+    
+    # Words per message comparison
+    if stats1['avg_words_per_message'] > stats2['avg_words_per_message']:
+        verbose_winner = user1
+        verbose_diff = stats1['avg_words_per_message'] - stats2['avg_words_per_message']
+    elif stats2['avg_words_per_message'] > stats1['avg_words_per_message']:
+        verbose_winner = user2
+        verbose_diff = stats2['avg_words_per_message'] - stats1['avg_words_per_message']
+    else:
+        verbose_winner = "Tie"
+        verbose_diff = 0
+    
+    # Display summary
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if msg_winner != "Tie":
+            st.markdown(f"""
+            <div class='metric-card' style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);'>
+                <div class='metric-card-icon'>👑</div>
+                <div class='metric-card-label'>Most Talkative</div>
+                <div class='metric-card-value' style='color: white;'>{msg_winner}</div>
+                <div style='font-size: 0.8rem; color: white; opacity: 0.9;'>+{msg_diff} messages ({msg_percent:.1f}% more)</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class='metric-card'>
+                <div class='metric-card-icon'>🤝</div>
+                <div class='metric-card-label'>Most Talkative</div>
+                <div class='metric-card-value'>Tie!</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        if sentiment_winner != "Tie":
+            st.markdown(f"""
+            <div class='metric-card' style='background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);'>
+                <div class='metric-card-icon'>😊</div>
+                <div class='metric-card-label'>Most Positive</div>
+                <div class='metric-card-value' style='color: white;'>{sentiment_winner}</div>
+                <div style='font-size: 0.8rem; color: white; opacity: 0.9;'>+{sentiment_diff:.3f} sentiment</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class='metric-card'>
+                <div class='metric-card-icon'>😐</div>
+                <div class='metric-card-label'>Most Positive</div>
+                <div class='metric-card-value'>Tie!</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col3:
+        if verbose_winner != "Tie":
+            st.markdown(f"""
+            <div class='metric-card' style='background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%);'>
+                <div class='metric-card-icon'>📖</div>
+                <div class='metric-card-label'>Most Verbose</div>
+                <div class='metric-card-value' style='color: white;'>{verbose_winner}</div>
+                <div style='font-size: 0.8rem; color: white; opacity: 0.9;'>+{verbose_diff:.1f} words/msg</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class='metric-card'>
+                <div class='metric-card-icon'>📝</div>
+                <div class='metric-card-label'>Most Verbose</div>
+                <div class='metric-card-value'>Tie!</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+def display_user_comparison_dashboard(df):
+    """Main function to display the User vs. User Comparison Dashboard"""
+    st.header("👥 User vs. User Comparison Dashboard")
+    st.markdown("Compare communication styles, activity patterns, and statistics between any two chat participants.")
+    st.markdown("---")
+    
+    # Get list of users (excluding System messages)
+    users = df[df['author'] != 'System']['author'].unique().tolist()
+    
+    if len(users) < 2:
+        st.warning("⚠️ Need at least 2 users in the chat to perform comparison analysis.")
+        return
+    
+    # User selection section
+    st.subheader("👥 Select Users to Compare")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        user1 = st.selectbox(
+            "👤 Select First User:",
+            users,
+            key="user1_selector"
+        )
+    
+    with col2:
+        # Filter out the selected user1 to prevent self-comparison
+        available_users2 = [u for u in users if u != user1]
+        user2 = st.selectbox(
+            "👤 Select Second User:",
+            available_users2,
+            key="user2_selector"
+        )
+    
+    if user1 == user2:
+        st.error("❌ Please select two different users for comparison.")
+        return
+    
+    st.markdown("---")
+    
+    # Calculate statistics for both users
+    with st.spinner("Analyzing user statistics..."):
+        stats1 = get_user_statistics(df, user1)
+        stats2 = get_user_statistics(df, user2)
+    
+    if stats1 is None:
+        st.error(f"No data found for {user1}")
+        return
+    if stats2 is None:
+        st.error(f"No data found for {user2}")
+        return
+    
+    # Display comparison summary first
+    display_comparison_summary(stats1, stats2, user1, user2)
+    
+    st.markdown("---")
+    
+    # Side-by-side comparison
+    st.subheader("📊 Detailed Side-by-Side Comparison")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        display_user_metrics_card(stats1, user1, "#667eea")
+    
+    with col2:
+        display_user_metrics_card(stats2, user2, "#f093fb")
+    
+    # Additional insights
+    st.markdown("---")
+    st.subheader("💡 Additional Insights")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Communication Patterns:**")
+        
+        # Peak activity hours
+        peak_hour1 = stats1['hourly_activity'].idxmax()
+        peak_hour2 = stats2['hourly_activity'].idxmax()
+        
+        st.write(f"• {user1} is most active at {peak_hour1}:00")
+        st.write(f"• {user2} is most active at {peak_hour2}:00")
+        
+        # Emoji usage
+        emoji_ratio1 = stats1['total_emojis'] / stats1['total_messages'] if stats1['total_messages'] > 0 else 0
+        emoji_ratio2 = stats2['total_emojis'] / stats2['total_messages'] if stats2['total_messages'] > 0 else 0
+        
+        st.write(f"• {user1} uses {emoji_ratio1:.2f} emojis per message")
+        st.write(f"• {user2} uses {emoji_ratio2:.2f} emojis per message")
+    
+    with col2:
+        st.write("**Conversation Dynamics:**")
+        
+        # Message length comparison
+        if stats1['avg_words_per_message'] > stats2['avg_words_per_message']:
+            st.write(f"• {user1} tends to write longer messages")
+        elif stats2['avg_words_per_message'] > stats1['avg_words_per_message']:
+            st.write(f"• {user2} tends to write longer messages")
+        else:
+            st.write("• Both users write similar length messages")
+        
+        # Sentiment comparison
+        if abs(stats1['avg_sentiment'] - stats2['avg_sentiment']) > 0.1:
+            if stats1['avg_sentiment'] > stats2['avg_sentiment']:
+                st.write(f"• {user1} is generally more positive in tone")
+            else:
+                st.write(f"• {user2} is generally more positive in tone")
+        else:
+            st.write("• Both users have similar sentiment patterns")
+        
+        # Activity overlap
+        overlap_hours = []
+        for hour in range(24):
+            if stats1['hourly_activity'][hour] > 0 and stats2['hourly_activity'][hour] > 0:
+                overlap_hours.append(hour)
+        
+        if overlap_hours:
+            st.write(f"• Most active together: {len(overlap_hours)} hours per day")
+        else:
+            st.write("• Users are active at different times")
+
 def main():
     load_css()
     
@@ -1660,8 +3067,14 @@ def main():
 
         with st.spinner("Performing AI threat analysis..."):
             api_key = get_gemini_api_key()
-            ai_threat_report = analyze_chat_for_threats_holistically(user_df, api_key)
-            num_ai_threats = ai_threat_report.count("<threat>")
+            if api_key:
+                ai_threat_report = analyze_chat_for_threats_holistically(user_df, api_key)
+                num_ai_threats = ai_threat_report.count("<threat>")
+            else:
+                st.warning("⚠️ **Gemini API Key not configured!** Threat detection is disabled.")
+                st.info("To enable AI threat detection:\n1. Get API key from [Google AI Studio](https://makersuite.google.com/app/apikey)\n2. Add it to `.gemini_api_key` file")
+                ai_threat_report = "API Key is required for threat analysis. The chat analysis will continue without threat detection."
+                num_ai_threats = 0
 
         with st.sidebar:
             st.header("📊 Chat Metrics & Report")
@@ -1674,11 +3087,47 @@ def main():
                 metric_card("📈", "Sentiment", f"{avg_sent:.2f}")
                 
                 st.markdown("---")
-                with st.spinner("Generating PDF Report..."):
-                    insights_for_pdf = f"Overall Sentiment: {'Positive' if avg_sent > 0.05 else 'Negative' if avg_sent < -0.05 else 'Neutral'} (Avg. Score: {avg_sent:.2f})\nTop Contributor: {top_sender}\nPeak Activity: Around {user_df['datetime_parsed'].dt.hour.value_counts().idxmax()}:00"
-                    
-                    pdf_bytes = generate_pdf_report(filtered_df, ai_threat_report, insights_for_pdf)
-                    st.download_button("📄 Download Report (PDF)", data=pdf_bytes, file_name="whatsapp_report.pdf", mime="application/pdf")
+                
+                # Add PDF customization UI
+                selected_sections, user_selections = create_pdf_customization_ui()
+                
+                # Generate PDF with custom sections
+                selected_count = sum(selected_sections.values()) + sum([
+                    user_selections.get('emoji_analysis', False),
+                    user_selections.get('detailed_stats', False)
+                ])
+                
+                if selected_count > 0:
+                    with st.spinner("Generating Customized PDF Report..."):
+                        insights_for_pdf = f"Overall Sentiment: {'Positive' if avg_sent > 0.05 else 'Negative' if avg_sent < -0.05 else 'Neutral'} (Avg. Score: {avg_sent:.2f})\nTop Contributor: {top_sender}\nPeak Activity: Around {user_df['datetime_parsed'].dt.hour.value_counts().idxmax()}:00"
+                        
+                        # Use the new modular PDF generation
+                        pdf_bytes = generate_modular_pdf_report(
+                            filtered_df, 
+                            ai_threat_report, 
+                            insights_for_pdf,
+                            selected_sections,
+                            user_selections
+                        )
+                        
+                        # Custom filename based on selections
+                        section_names = [name for name, selected in selected_sections.items() if selected]
+                        if user_selections.get('emoji_analysis', False):
+                            section_names.append('emoji')
+                        if user_selections.get('detailed_stats', False):
+                            section_names.append('stats')
+                        
+                        filename = f"whatsapp_report_{len(section_names)}sections.pdf"
+                        
+                        st.download_button(
+                            "📄 Download Customized Report (PDF)", 
+                            data=pdf_bytes, 
+                            file_name=filename, 
+                            mime="application/pdf",
+                            help=f"Download PDF with {selected_count} selected sections"
+                        )
+                else:
+                    st.warning("⚠️ Please select at least one section to generate PDF report")
             else:
                 metric_card("💬", "Messages", "0")
                 metric_card("🚨", "Threats", "0")
@@ -1721,12 +3170,14 @@ def main():
             </div>
             """, unsafe_allow_html=True)
         
-        tab_list = ["🤖 AI Context Analysis", "📊 Dashboard", "☁️ Word Cloud", "👤 User Deep Dive", "📄 Raw Data"]
-        tab_ai, tab_dashboard, tab_wordcloud, tab_user_dive, tab_raw_data = st.tabs(tab_list)
+        tab_list = ["🤖 AI Context Analysis", "📊 Dashboard", "😊 Emoji Analysis", "👥 User vs User", "☁️ Word Cloud", "👤 User Deep Dive", "📄 Raw Data"]
+        tab_ai, tab_dashboard, tab_emoji, tab_comparison, tab_wordcloud, tab_user_dive, tab_raw_data = st.tabs(tab_list)
         
         with tab_ai:
             display_ai_threat_report(ai_threat_report, user_df['message'].tolist())
         with tab_dashboard: display_dashboard(filtered_df)
+        with tab_emoji: display_emoji_analysis_dashboard(filtered_df)
+        with tab_comparison: display_user_comparison_dashboard(filtered_df)
         with tab_wordcloud: display_word_cloud(filtered_df)
         with tab_user_dive: display_user_deepdive(filtered_df)
         with tab_raw_data:
