@@ -1,0 +1,15 @@
+# Minimal requirements for Streamlit Cloud (backup)
+streamlit
+pandas
+plotly
+textblob
+vaderSentiment
+wordcloud
+scikit-learn
+fpdf2
+google-generativeai
+matplotlib
+seaborn
+nltk
+Pillow
+requests
