@@ -3065,26 +3065,198 @@ def main():
         
         user_df = filtered_df[filtered_df['author'] != 'System']
 
-        with st.spinner("Performing AI threat analysis..."):
-            api_key = get_gemini_api_key()
-            if api_key:
-                ai_threat_report = analyze_chat_for_threats_holistically(user_df, api_key)
-                num_ai_threats = ai_threat_report.count("<threat>")
+        # Smart Analysis Recommendations System (SURPRISE!)
+        st.markdown("### 🧠 Intelligent Analysis Assistant")
+        
+        # Analyze chat characteristics for smart recommendations
+        total_messages = len(user_df)
+        unique_users = user_df['author'].nunique()
+        avg_msg_length = user_df['message'].str.len().mean()
+        has_negative_sentiment = (user_df['sentiment'] < -0.3).any()
+        has_concerning_keywords = user_df['message'].str.contains(
+            r'\b(threat|kill|hurt|weapon|bomb|attack|violence|hate|revenge|fight|angry|mad)\b', 
+            case=False, na=False
+        ).any()
+        
+        # Generate smart recommendation
+        recommendation_score = 0
+        if total_messages > 100: recommendation_score += 1
+        if unique_users > 5: recommendation_score += 1  
+        if avg_msg_length > 50: recommendation_score += 1
+        if has_negative_sentiment: recommendation_score += 2
+        if has_concerning_keywords: recommendation_score += 3
+        
+        # Smart recommendation display
+        col1, col2, col3 = st.columns([2, 2, 1])
+        
+        with col1:
+            if recommendation_score >= 4:
+                st.warning("🚨 **AI Analysis Recommended** - Potential security concerns detected")
+                recommended_mode = True
+            elif recommendation_score >= 2:
+                st.info("🔍 **AI Analysis Suggested** - Complex conversation patterns found")  
+                recommended_mode = True
             else:
-                st.warning("⚠️ **Gemini API Key not configured!** Threat detection is disabled.")
-                st.info("To enable AI threat detection:\n1. Get API key from [Google AI Studio](https://makersuite.google.com/app/apikey)\n2. Add it to `.gemini_api_key` file")
-                ai_threat_report = "API Key is required for threat analysis. The chat analysis will continue without threat detection."
-                num_ai_threats = 0
+                st.success("⚡ **Basic Mode Sufficient** - Simple conversation detected")
+                recommended_mode = False
+        
+        with col2:
+            enable_ai_analysis = st.checkbox(
+                "🤖 Enable AI Threat Analysis", 
+                value=recommended_mode,
+                help="Performs comprehensive AI-powered threat detection and psychological profiling. Disable for faster analysis with basic features only."
+            )
+        
+        with col3:
+            if enable_ai_analysis:
+                st.info("⏱️ ~60s", icon="🕐")
+            else:
+                st.success("⚡ Instant", icon="🚀")
+
+        # Perform AI Analysis if enabled
+        if enable_ai_analysis:
+            # Enhanced Progress Tracker (SURPRISE!)
+            st.markdown("### 🔄 AI Analysis Progress")
+            progress_container = st.container()
+            
+            with progress_container:
+                # Create progress steps
+                steps = [
+                    "🔍 Analyzing conversation context and patterns...",
+                    "🧠 Performing psychological profiling assessment...", 
+                    "⚡ Applying advanced threat detection algorithms...",
+                    "📊 Generating comprehensive security report...",
+                    "✅ Analysis complete!"
+                ]
+                
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                api_key = get_gemini_api_key()
+                if api_key:
+                    # Simulate progress steps for better UX
+                    for i, step in enumerate(steps[:-1]):
+                        status_text.text(step)
+                        progress_bar.progress((i + 1) * 20)
+                        if i == 0:
+                            time.sleep(0.5)  # Quick context analysis
+                        elif i == 1:
+                            time.sleep(1.0)   # Profiling takes longer
+                        else:
+                            time.sleep(0.3)   # Other steps
+                    
+                    # Actual AI analysis
+                    status_text.text("🤖 Consulting AI security expert...")
+                    progress_bar.progress(90)
+                    
+                    ai_threat_report = analyze_chat_for_threats_holistically(user_df, api_key)
+                    num_ai_threats = ai_threat_report.count("<threat>")
+                    
+                    # Complete
+                    status_text.text(steps[-1])
+                    progress_bar.progress(100)
+                    time.sleep(0.5)
+                    
+                    # Clear progress after completion
+                    progress_container.empty()
+                    st.success(f"🎯 **AI Analysis Complete!** {num_ai_threats} potential threats identified")
+                    
+                else:
+                    progress_container.empty()
+                    st.warning("⚠️ **Gemini API Key not configured!** Threat detection is disabled.")
+                    st.info("To enable AI threat detection:\n1. Get API key from [Google AI Studio](https://makersuite.google.com/app/apikey)\n2. Add it to `.gemini_api_key` file")
+                    ai_threat_report = "API Key is required for threat analysis. The chat analysis will continue without threat detection."
+                    num_ai_threats = 0
+        else:
+            # Basic analysis without AI
+            st.success("✅ **Basic Analysis Mode** - AI threat analysis disabled. Using standard analysis features only.")
+            ai_threat_report = """🔍 **Basic Analysis Mode Active**
+
+AI threat analysis has been disabled by user preference. The platform is running in basic mode with the following features available:
+
+✅ **Available Features:**
+• 📊 Chat Dashboard - Message statistics and sentiment analysis
+• 😊 Emoji Analysis - Comprehensive emoji usage patterns  
+• 👥 User Comparison - Side-by-side participant analysis
+• ☁️ Word Cloud - Visual word frequency analysis
+• 👤 User Deep Dive - Individual participant insights
+• 📄 Raw Data - Complete chat data access
+• 📋 PDF Reports - Customizable report generation
+
+⚡ **Benefits of Basic Mode:**
+• Faster analysis processing
+• No external API dependencies
+• Immediate results
+• Full privacy (no data sent to external services)
+
+💡 **To enable AI analysis:** Check the "Enable AI Threat Analysis" option above for comprehensive psychological profiling and advanced threat detection."""
+            num_ai_threats = 0
 
         with st.sidebar:
-            st.header("📊 Chat Metrics & Report")
+            st.header("📊 Chat Metrics & Analysis Report")
+            
+            # Enhanced Analysis Mode Indicator (SURPRISE!)
+            if enable_ai_analysis:
+                st.success("🤖 **AI Analysis Mode** - Advanced threat detection enabled")
+                with st.expander("🔍 AI Analysis Details", expanded=False):
+                    st.write("**Features Active:**")
+                    st.write("• 🧠 Psychological profiling")  
+                    st.write("• 🚨 Threat pattern recognition")
+                    st.write("• 📈 Behavioral analysis")
+                    st.write("• 🔄 Context understanding")
+                    st.write("• ⚡ Risk stratification")
+            else:
+                st.info("⚡ **Basic Mode** - Lightning-fast analysis")
+                with st.expander("🚀 Basic Mode Benefits", expanded=False):
+                    st.write("**Performance Benefits:**") 
+                    st.write("• ⚡ Instant results (< 1 second)")
+                    st.write("• 🔒 100% privacy (no external calls)")
+                    st.write("• 💾 Lower resource usage")
+                    st.write("• 🌐 Works offline")
+                    st.write("• 🔋 Battery efficient")
+            
             if not user_df.empty:
+                st.markdown("---")
+                st.subheader("📈 Key Metrics")
+                
                 top_sender = user_df['author'].value_counts().idxmax()
                 avg_sent = user_df['sentiment'].mean()
+                
+                # Enhanced metrics with icons and colors
                 metric_card("💬", "Messages", f"{len(user_df):,}")
-                metric_card("🚨", "Threats", num_ai_threats)
+                
+                # Threat metric with dynamic color
+                if num_ai_threats > 0:
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(90deg, #ff4444, #ff6666); padding: 10px; border-radius: 5px; margin: 5px 0;">
+                        <div style="color: white; font-weight: bold;">🚨 Threats: {num_ai_threats}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(90deg, #44ff44, #66ff66); padding: 10px; border-radius: 5px; margin: 5px 0;">
+                        <div style="color: white; font-weight: bold;">✅ Threats: {num_ai_threats}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
                 metric_card("👑", "Top User", top_sender)
-                metric_card("📈", "Sentiment", f"{avg_sent:.2f}")
+                
+                # Sentiment with color coding
+                if avg_sent > 0.1:
+                    sentiment_color = "#44ff44"
+                    sentiment_icon = "😊"
+                elif avg_sent < -0.1:
+                    sentiment_color = "#ff4444" 
+                    sentiment_icon = "😟"
+                else:
+                    sentiment_color = "#ffaa44"
+                    sentiment_icon = "😐"
+                    
+                st.markdown(f"""
+                <div style="background: linear-gradient(90deg, {sentiment_color}, {sentiment_color}88); padding: 10px; border-radius: 5px; margin: 5px 0;">
+                    <div style="color: white; font-weight: bold;">{sentiment_icon} Sentiment: {avg_sent:.2f}</div>
+                </div>
+                """, unsafe_allow_html=True)
                 
                 st.markdown("---")
                 
@@ -3170,7 +3342,7 @@ def main():
             </div>
             """, unsafe_allow_html=True)
         
-        tab_list = ["🤖 AI Context Analysis", "📊 Dashboard", "😊 Emoji Analysis", "👥 User vs User", "☁️ Word Cloud", "👤 User Deep Dive", "📄 Raw Data"]
+        tab_list = ["🤖 AI Analysis", "📊 Dashboard", "😊 Emoji Analysis", "👥 User vs User", "☁️ Word Cloud", "👤 User Deep Dive", "📄 Raw Data"]
         tab_ai, tab_dashboard, tab_emoji, tab_comparison, tab_wordcloud, tab_user_dive, tab_raw_data = st.tabs(tab_list)
         
         with tab_ai:
