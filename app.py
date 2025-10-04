@@ -3005,10 +3005,11 @@ def main():
         st.image(get_image_as_base64(SIDEBAR_LOGO_SVG), width=50)
         st.header("🕵️‍♀️ Controls Panel")
         uploaded_file = st.file_uploader(
-            "📱 Upload WhatsApp chat export", 
-            type=["txt", "zip", "csv"], 
-            help="Accepted formats: .txt (most common), .zip (iOS exports), .csv",
-            accept_multiple_files=False
+            "📱 Upload WhatsApp chat export (.txt file)", 
+            type=["txt"],
+            help="Upload your WhatsApp chat export file (must be .txt format)",
+            accept_multiple_files=False,
+            key="whatsapp_uploader"
         )
         
     st.markdown("""<div class="title-container"><div class="main-title">WhatsApp Chat Analysis</div><div class="sub-title">Analyze sentiment, threats, and activity patterns from your chat history.</div></div>""", unsafe_allow_html=True)
@@ -3023,45 +3024,26 @@ def main():
             st.success(f"New file detected: '{uploaded_file.name}'. Running fresh analysis...")
             time.sleep(1)
 
-        # Enhanced file processing for mobile compatibility
+        # Process uploaded file
         try:
-            file_extension = uploaded_file.name.lower().split('.')[-1]
+            raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
             
-            if file_extension == 'zip':
-                # Handle iOS WhatsApp exports (often zipped)
-                import zipfile
-                with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
-                    # Look for txt files in the zip
-                    txt_files = [f for f in zip_ref.namelist() if f.endswith('.txt')]
-                    if txt_files:
-                        with zip_ref.open(txt_files[0]) as txt_file:
-                            raw_text = txt_file.read().decode("utf-8", errors="ignore")
-                    else:
-                        st.error("No .txt file found in the uploaded zip archive.")
-                        return
-            elif file_extension == 'csv':
-                # Handle CSV exports
-                raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
-                # Convert CSV to WhatsApp format if needed
-                if ',' in raw_text[:100]:  # Basic CSV detection
-                    st.info("CSV format detected. Converting to WhatsApp format...")
-                    # Keep as is for now, preprocessing will handle it
-            else:
-                # Handle standard txt files
-                raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
-            
-            # Additional mobile-friendly checks
+            # Validate file content
             if len(raw_text.strip()) < 50:
                 st.error("⚠️ File seems too small. Please ensure you've uploaded a complete WhatsApp chat export.")
                 st.info("💡 **Mobile Tip:** Make sure to export the full chat history, not just selected messages.")
                 return
                 
+            # Check if it looks like a WhatsApp export
+            if not any(indicator in raw_text[:500] for indicator in ['-', ':', 'AM', 'PM', '/']):
+                st.warning("🤔 This doesn't look like a WhatsApp export. Please make sure you've exported the chat correctly.")
+                
         except Exception as e:
             st.error(f"❌ Error reading file: {str(e)}")
             st.info("🔧 **Troubleshooting Tips:**")
+            st.info("• Make sure the file is a .txt file")
             st.info("• Try exporting the chat again from WhatsApp")
             st.info("• Ensure the file isn't corrupted")
-            st.info("• Try using a different file format (.txt is most reliable)")
             return
         df = preprocess_chat(raw_text)
 

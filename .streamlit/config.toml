@@ -3,10 +3,11 @@ developmentMode = false
 
 [server]
 headless = true
-enableCORS = false
+enableCORS = true
 enableXsrfProtection = false
 maxUploadSize = 200
 fileWatcherType = "none"
+allowUploadedFileUrls = true
 
 [client]
 toolbarMode = "minimal"
