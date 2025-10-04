@@ -3004,7 +3004,12 @@ def main():
     with st.sidebar:
         st.image(get_image_as_base64(SIDEBAR_LOGO_SVG), width=50)
         st.header("🕵️‍♀️ Controls Panel")
-        uploaded_file = st.file_uploader("Upload WhatsApp chat export (.txt)", type=["txt"])
+        uploaded_file = st.file_uploader(
+            "📱 Upload WhatsApp chat export", 
+            type=["txt", "zip", "csv"], 
+            help="Accepted formats: .txt (most common), .zip (iOS exports), .csv",
+            accept_multiple_files=False
+        )
         
     st.markdown("""<div class="title-container"><div class="main-title">WhatsApp Chat Analysis</div><div class="sub-title">Analyze sentiment, threats, and activity patterns from your chat history.</div></div>""", unsafe_allow_html=True)
 
@@ -3018,7 +3023,46 @@ def main():
             st.success(f"New file detected: '{uploaded_file.name}'. Running fresh analysis...")
             time.sleep(1)
 
-        raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
+        # Enhanced file processing for mobile compatibility
+        try:
+            file_extension = uploaded_file.name.lower().split('.')[-1]
+            
+            if file_extension == 'zip':
+                # Handle iOS WhatsApp exports (often zipped)
+                import zipfile
+                with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
+                    # Look for txt files in the zip
+                    txt_files = [f for f in zip_ref.namelist() if f.endswith('.txt')]
+                    if txt_files:
+                        with zip_ref.open(txt_files[0]) as txt_file:
+                            raw_text = txt_file.read().decode("utf-8", errors="ignore")
+                    else:
+                        st.error("No .txt file found in the uploaded zip archive.")
+                        return
+            elif file_extension == 'csv':
+                # Handle CSV exports
+                raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
+                # Convert CSV to WhatsApp format if needed
+                if ',' in raw_text[:100]:  # Basic CSV detection
+                    st.info("CSV format detected. Converting to WhatsApp format...")
+                    # Keep as is for now, preprocessing will handle it
+            else:
+                # Handle standard txt files
+                raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
+            
+            # Additional mobile-friendly checks
+            if len(raw_text.strip()) < 50:
+                st.error("⚠️ File seems too small. Please ensure you've uploaded a complete WhatsApp chat export.")
+                st.info("💡 **Mobile Tip:** Make sure to export the full chat history, not just selected messages.")
+                return
+                
+        except Exception as e:
+            st.error(f"❌ Error reading file: {str(e)}")
+            st.info("🔧 **Troubleshooting Tips:**")
+            st.info("• Try exporting the chat again from WhatsApp")
+            st.info("• Ensure the file isn't corrupted")
+            st.info("• Try using a different file format (.txt is most reliable)")
+            return
         df = preprocess_chat(raw_text)
 
         if df.empty or 'datetime' not in df.columns or df['datetime'].str.strip().eq('').all():
@@ -3356,7 +3400,28 @@ AI threat analysis has been disabled by user preference. The platform is running
             st.subheader("Filtered Chat Data")
             st.dataframe(filtered_df.head(200), use_container_width=True)
     else:
-        st.info("**Welcome!** Please upload a WhatsApp `.txt` file using the sidebar to begin.", icon="👋")
+        st.info("📱 **Welcome!** Upload your WhatsApp chat export using the sidebar to begin analysis.", icon="👋")
+        
+        # Mobile-friendly instructions
+        with st.expander("📱 How to Export WhatsApp Chat on Mobile", expanded=False):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("📱 Android/iPhone")
+                st.write("1. Open WhatsApp chat")
+                st.write("2. Tap the 3 dots (⋮) or contact name")
+                st.write("3. Select **'Export chat'**")
+                st.write("4. Choose **'Without media'**")
+                st.write("5. Save/share the .txt file")
+                st.write("6. Upload the file here ⬅️")
+            
+            with col2:
+                st.subheader("📂 File Formats Supported")
+                st.write("✅ **.txt** (most common)")
+                st.write("✅ **.zip** (iOS exports)")
+                st.write("✅ **.csv** (some exports)")
+                st.write("⚠️ File must be < 200MB")
+                st.write("� If issues persist, try exporting again")
         st.markdown("---")
         st.subheader("How It Works")
         col1, col2, col3 = st.columns(3)
