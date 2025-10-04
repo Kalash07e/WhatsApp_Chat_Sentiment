@@ -3018,6 +3018,10 @@ def main():
         st.session_state.current_file_name = None
 
     if uploaded_file:
+        # Debug: Show upload status
+        st.success(f"✅ File '{uploaded_file.name}' uploaded successfully!")
+        st.write(f"📁 **File size:** {uploaded_file.size} bytes")
+        
         if uploaded_file.name != st.session_state.current_file_name:
             st.cache_data.clear()
             st.session_state.current_file_name = uploaded_file.name
@@ -3026,17 +3030,30 @@ def main():
 
         # Process uploaded file
         try:
-            raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
-            
-            # Validate file content
-            if len(raw_text.strip()) < 50:
-                st.error("⚠️ File seems too small. Please ensure you've uploaded a complete WhatsApp chat export.")
-                st.info("💡 **Mobile Tip:** Make sure to export the full chat history, not just selected messages.")
-                return
+            # Read file content once and store it
+            if uploaded_file is not None:
+                # Reset file pointer to beginning
+                uploaded_file.seek(0)
+                raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
                 
-            # Check if it looks like a WhatsApp export
-            if not any(indicator in raw_text[:500] for indicator in ['-', ':', 'AM', 'PM', '/']):
-                st.warning("🤔 This doesn't look like a WhatsApp export. Please make sure you've exported the chat correctly.")
+                # Debug info for troubleshooting
+                st.write(f"📄 **File Info:** {uploaded_file.name} ({len(raw_text)} characters)")
+                
+                # Validate file content
+                if len(raw_text.strip()) < 50:
+                    st.error("⚠️ File seems too small. Please ensure you've uploaded a complete WhatsApp chat export.")
+                    st.info("💡 **Mobile Tip:** Make sure to export the full chat history, not just selected messages.")
+                    st.info(f"🔍 **Debug:** File has only {len(raw_text)} characters")
+                    return
+                    
+                # Check if it looks like a WhatsApp export
+                if not any(indicator in raw_text[:500] for indicator in ['-', ':', 'AM', 'PM', '/', 'WhatsApp']):
+                    st.warning("🤔 This doesn't look like a WhatsApp export. Please make sure you've exported the chat correctly.")
+                    st.info(f"🔍 **Debug:** First 200 characters: {raw_text[:200]}")
+                    
+            else:
+                st.error("No file uploaded or file is empty.")
+                return
                 
         except Exception as e:
             st.error(f"❌ Error reading file: {str(e)}")
@@ -3044,11 +3061,33 @@ def main():
             st.info("• Make sure the file is a .txt file")
             st.info("• Try exporting the chat again from WhatsApp")
             st.info("• Ensure the file isn't corrupted")
+            st.info(f"🔍 **Technical Error:** {type(e).__name__}: {str(e)}")
             return
-        df = preprocess_chat(raw_text)
-
-        if df.empty or 'datetime' not in df.columns or df['datetime'].str.strip().eq('').all():
-            st.error("Could not parse the chat file. Please ensure it is a valid WhatsApp export.")
+        # Preprocess the chat data
+        try:
+            st.info("🔄 Processing chat data...")
+            df = preprocess_chat(raw_text)
+            st.write(f"📊 **Processing Result:** Found {len(df)} messages")
+            
+            if df.empty:
+                st.error("❌ Could not extract any messages from the file.")
+                st.info("🔧 **Possible Issues:**")
+                st.info("• File might not be a WhatsApp export")
+                st.info("• Wrong date/time format")
+                st.info("• File encoding issues")
+                st.info(f"🔍 **Raw text preview:** {raw_text[:300]}...")
+                return
+                
+            if 'datetime' not in df.columns or df['datetime'].str.strip().eq('').all():
+                st.error("❌ Could not parse datetime information from the chat.")
+                st.info(f"🔍 **Columns found:** {list(df.columns)}")
+                st.info(f"🔍 **Sample data:** {df.head()}")
+                return
+                
+        except Exception as e:
+            st.error(f"❌ Error processing chat data: {str(e)}")
+            st.info(f"🔍 **Technical Error:** {type(e).__name__}: {str(e)}")
+            st.info("🔧 **Try:** Re-exporting the chat from WhatsApp")
             return
 
         df['sentiment'] = df['message'].apply(analyze_sentiment)
