@@ -93,15 +93,16 @@ except Exception:
 # NLTK is still needed for WordCloud stopwords
 import nltk
 
-# Ensure NLTK stopwords are downloaded for WordCloud
+# Ensure NLTK stopwords are downloaded for WordCloud (non-blocking)
 try:
     nltk.data.find("corpora/stopwords")
 except LookupError:
     try:
-        nltk.download("stopwords")
+        nltk.download("stopwords", quiet=True)
     except Exception as e:
-        st.error("Failed to download NLTK stopwords. Please check your internet connection or manually download the data.")
-        raise e
+        # Don't block app startup if NLTK download fails
+        print(f"Warning: Failed to download NLTK stopwords: {e}")
+        pass
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIG & STYLES
