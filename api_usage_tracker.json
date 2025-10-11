@@ -1,0 +1,40 @@
+{
+  "google_gemini_api": {
+    "total_quota_limit": 250,
+    "current_usage": {
+      "daily": 0,
+      "monthly": 0,
+      "total": 0
+    },
+    "remaining_quota": 250,
+    "usage_history": {
+      "daily_usage": {},
+      "monthly_usage": {}
+    },
+    "last_reset_date": "2025-10-04",
+    "last_usage_date": null,
+    "quota_warnings": {
+      "75_percent_warning": false,
+      "90_percent_warning": false,
+      "95_percent_warning": false
+    },
+    "usage_stats": {
+      "successful_requests": 0,
+      "failed_requests": 0,
+      "average_daily_usage": 0,
+      "peak_usage_day": null,
+      "peak_usage_count": 0
+    },
+    "api_key_info": {
+      "created_date": "2025-10-04",
+      "expires_date": null,
+      "status": "active"
+    }
+  },
+  "tracking_metadata": {
+    "file_version": "1.0",
+    "last_updated": "2025-10-04T00:00:00Z",
+    "tracking_enabled": true,
+    "auto_reset_monthly": true
+  }
+}
