@@ -8,6 +8,7 @@ import pandas as pd
 import time
 from pathlib import Path
 import sys
+import os
 
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent / "src"))
@@ -22,6 +23,34 @@ from src.whatsapp_analyzer.utils.logger import setup_logging, get_logger
 # Setup logging
 setup_logging("INFO")
 logger = get_logger(__name__)
+
+# Load API key from file automatically
+def load_api_key_from_file():
+    """Load Google Gemini API key from .gemini_api_key file."""
+    api_key_path = Path(__file__).parent / ".gemini_api_key"
+    try:
+        if api_key_path.exists():
+            with open(api_key_path, 'r') as f:
+                api_key = f.read().strip()
+                if api_key:
+                    logger.info("✅ API key loaded from .gemini_api_key file")
+                    return api_key
+    except Exception as e:
+        logger.error(f"Failed to load API key from file: {e}")
+    
+    # Fallback to Streamlit secrets for deployment
+    try:
+        if hasattr(st, 'secrets') and 'GEMINI_API_KEY' in st.secrets:
+            logger.info("✅ API key loaded from Streamlit secrets")
+            return st.secrets['GEMINI_API_KEY']
+    except Exception:
+        pass
+    
+    logger.warning("⚠️ No API key found. Threat analysis will be disabled.")
+    return None
+
+# Auto-load API key
+AUTO_LOADED_API_KEY = load_api_key_from_file()
 
 # Configure Streamlit page
 st.set_page_config(
@@ -48,8 +77,11 @@ class WhatsAppAnalyzerApp:
         if 'current_file_name' not in st.session_state:
             st.session_state.current_file_name = None
         
+        # Auto-load API key from file
         if 'api_key' not in st.session_state:
-            st.session_state.api_key = ''
+            st.session_state.api_key = AUTO_LOADED_API_KEY or ''
+        elif not st.session_state.api_key and AUTO_LOADED_API_KEY:
+            st.session_state.api_key = AUTO_LOADED_API_KEY
         
         if 'analysis_result' not in st.session_state:
             st.session_state.analysis_result = None
@@ -99,16 +131,11 @@ class WhatsAppAnalyzerApp:
             )
             st.session_state.uploaded_file = uploaded_file
             
-            # API Configuration
-            with st.expander("🔑 API Configuration"):
-                api_key_input = st.text_input(
-                    "Enter Google AI API Key", 
-                    type="password", 
-                    value=st.session_state.api_key,
-                    help="Required for AI-powered threat detection"
-                )
-                if api_key_input:
-                    st.session_state.api_key = api_key_input
+            # Show API key status (read-only, no input)
+            if st.session_state.api_key:
+                st.success("✅ API Key Loaded - Threat Analysis Enabled")
+            else:
+                st.warning("⚠️ No API Key - Threat Analysis Disabled")
             
             # Analysis filters (shown only when file is uploaded)
             if uploaded_file and st.session_state.analysis_result:

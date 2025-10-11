@@ -19,6 +19,7 @@ def get_gemini_api_key():
         pass
     
     return None
+
 import io
 import re
 import csv
@@ -48,6 +49,12 @@ from sklearn.decomposition import LatentDirichletAllocation
 from fpdf import FPDF
 
 # Import authentication system
+# Import API quota monitoring system
+from api_quota_monitor import (
+    get_api_tracker, 
+    display_quota_status_sidebar, 
+    check_api_quota_before_call
+)
 from auth import (
     is_user_logged_in, create_login_form, create_user_dashboard, 
     show_user_profile, get_all_users, is_admin_user, configure_admin_access, ADMIN_EMAILS, USER_DB_FILE
@@ -90,16 +97,65 @@ import nltk
 try:
     nltk.data.find("corpora/stopwords")
 except LookupError:
-    nltk.download("stopwords")
+    try:
+        nltk.download("stopwords")
+    except Exception as e:
+        st.error("Failed to download NLTK stopwords. Please check your internet connection or manually download the data.")
+        raise e
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIG & STYLES
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="WhatsApp Chat Analysis",
+    page_title="WhatsApp Chat Sentiment Analysis | AI-Powered Chat Analytics",
     page_icon="🕵️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': 'https://github.com/Kalash07e/WhatsApp_Chat_Sentiment',
+        'Report a bug': 'https://github.com/Kalash07e/WhatsApp_Chat_Sentiment/issues',
+        'About': "# WhatsApp Chat Sentiment Analysis\nAI-powered sentiment analysis and threat detection for WhatsApp chats. Analyze emotions, activity patterns, and security risks in your conversations."
+    }
 )
+
+# Add SEO Meta Tags
+st.markdown("""
+<head>
+    <meta name="description" content="Free AI-powered WhatsApp chat sentiment analysis tool. Analyze emotions, detect threats, generate insights from your chat history. Advanced sentiment analysis with emoji patterns, user comparisons, and PDF reports.">
+    <meta name="keywords" content="WhatsApp, chat analysis, sentiment analysis, AI, emotion detection, threat detection, chat analytics, conversation analysis, social media analysis, text mining">
+    <meta name="author" content="Kalash Bhargava">
+    <meta name="robots" content="index, follow">
+    <meta property="og:title" content="WhatsApp Chat Sentiment Analysis - AI-Powered Analytics">
+    <meta property="og:description" content="Analyze your WhatsApp conversations with advanced AI. Get sentiment insights, emoji patterns, threat detection, and detailed reports.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://rvjr7jwntmp4t.streamlit.app">
+    <meta property="og:image" content="https://raw.githubusercontent.com/Kalash07e/WhatsApp_Chat_Sentiment/main/docs/preview.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="WhatsApp Chat Sentiment Analysis">
+    <meta name="twitter:description" content="AI-powered WhatsApp chat analysis with sentiment detection, emoji patterns, and threat assessment.">
+    <link rel="canonical" href="https://rvjr7jwntmp4t.streamlit.app">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "WhatsApp Chat Sentiment Analysis",
+        "description": "AI-powered tool for analyzing WhatsApp chat sentiment, emotions, and patterns",
+        "url": "https://rvjr7jwntmp4t.streamlit.app",
+        "author": {
+            "@type": "Person",
+            "name": "Kalash Bhargava"
+        },
+        "applicationCategory": "Analytics",
+        "operatingSystem": "Any",
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+        }
+    }
+    </script>
+</head>
+""", unsafe_allow_html=True)
 
 # Modified load_css to accept theme toggle and small visual polish options
 def load_css(theme="dark"):
@@ -355,14 +411,35 @@ def analyze_sentiment(message: str) -> float:
     has_hinglish = any(w in hinglish_words for w in words)
     return vader_analyzer.polarity_scores(message)['compound'] if has_hinglish else TextBlob(message).sentiment.polarity
 
-@st.cache_data
 def analyze_chat_for_threats_holistically(_df, api_key):
     """Enhanced AI Context-Based Threat Analysis with Advanced Psychological Profiling"""
     if not api_key:
         return "API Key is required for this feature."
+    
+    # Check API quota before making call
+    api_tracker = get_api_tracker()
+    can_call, quota_message = check_api_quota_before_call()
+    
+    if not can_call:
+        return f"""⚠️ **API Quota Status: {quota_message}**
+
+Your Google Gemini API quota has been reached. 
+
+**Current Status:**
+- Total quota: {api_tracker.get_quota_status()['total_quota']} requests
+- Used: {api_tracker.get_quota_status()['used_quota']} requests  
+- Remaining: {api_tracker.get_quota_status()['remaining_quota']} requests
+
+**Options:**
+1. **Wait**: Quota may reset based on your plan
+2. **Upgrade**: Enable billing in Google Cloud Console for higher limits
+3. **Continue**: All other features work normally without threat detection
+
+The chat analysis will continue with all other features enabled."""
+    
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
         # Enhanced context preparation
         authors = list(_df['author'].unique())
@@ -411,7 +488,7 @@ def analyze_chat_for_threats_holistically(_df, api_key):
         - Creative writing or fictional scenarios
 
         **OUTPUT FORMAT:**
-        For each credible threat identified, use this enhanced format:
+        IMPORTANT: You MUST use this EXACT XML format for any threats found:
 
         <threat>
         <risk_level>CRITICAL | HIGH | MEDIUM | LOW</risk_level>
@@ -431,9 +508,10 @@ def analyze_chat_for_threats_holistically(_df, api_key):
         </threat>
 
         **SAFETY PROTOCOLS:**
-        - If NO credible threats exist: "✅ COMPREHENSIVE ANALYSIS COMPLETE - No credible security threats detected."
+        - If NO credible threats exist, respond EXACTLY: "✅ COMPREHENSIVE ANALYSIS COMPLETE - No credible security threats detected."
         - For borderline cases: Explain why content doesn't meet threat criteria
         - Focus on actionable intelligence, not false positives
+        - DO NOT use the <threat> XML format unless you found a genuine security concern
 
         **CONVERSATION LOG:**
         ================
@@ -442,9 +520,32 @@ def analyze_chat_for_threats_holistically(_df, api_key):
         """
         
         response = model.generate_content(enhanced_prompt, request_options={'timeout': 150})
-        return response.text
+        
+        # Record successful API usage
+        api_tracker.record_api_usage(success=True)
+        
+        # Check if response is valid
+        response_text = response.text
+        
+        # DEBUG: Log the actual response to see what we're getting
+        import streamlit as st
+        with st.expander("🔍 DEBUG: View Raw AI Response", expanded=False):
+            st.code(response_text, language="text")
+        
+        # Check if response is valid
+        if "<threat>" not in response_text and "No credible" not in response_text and "COMPREHENSIVE ANALYSIS COMPLETE" not in response_text:
+            # If AI didn't follow format, wrap it nicely
+            return f"""✅ COMPREHENSIVE ANALYSIS COMPLETE - No credible security threats detected.
+
+**AI Analysis Notes:**
+{response_text}"""
+        
+        return response_text
         
     except Exception as e:
+        # Record failed API usage
+        api_tracker.record_api_usage(success=False)
+        
         if "quota" in str(e).lower() or "429" in str(e):
             return """⚠️ **Gemini API Quota Exceeded**
 
@@ -1686,7 +1787,7 @@ def add_key_insights_section(pdf, insights_text, df):
     pdf.set_font("Arial", '', 10)
     
     total_messages = len(df)
-    unique_users = len(df[df['author'] != 'System']['author'].unique())
+    unique_users = df[df['author'] != 'System']['author'].nunique()
     avg_sentiment = df['sentiment'].mean()
     
     stats_text = f"""
@@ -1701,6 +1802,42 @@ Analysis Summary:
     
     cleaned_text = stats_text.encode('latin-1', 'ignore').decode('latin-1')
     pdf.multi_cell(0, 6, cleaned_text)
+    pdf.ln(10)
+
+    # Detailed statistics
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, 'Detailed Statistics:', 0, 1)
+    pdf.set_font("Arial", '', 10)
+    
+    # Message count
+    total_messages = len(df)
+    pdf.cell(0, 6, f"Total Messages: {total_messages:,}", 0, 1)
+    
+    # User count
+    unique_users = df['author'].nunique()
+    pdf.cell(0, 6, f"Unique Participants: {unique_users}", 0, 1)
+    
+    # Sentiment analysis
+    avg_sentiment = df['sentiment'].mean()
+    positive_count = len(df[df['sentiment'] > 0.05])
+    negative_count = len(df[df['sentiment'] < -0.05])
+    neutral_count = len(df[(df['sentiment'] >= -0.05) & (df['sentiment'] <= 0.05)])
+    
+    pdf.cell(0, 6, f"Average Sentiment Score: {avg_sentiment:.3f}", 0, 1)
+    pdf.cell(0, 6, f"Positive Messages: {positive_count}", 0, 1)
+    pdf.cell(0, 6, f"Negative Messages: {negative_count}", 0, 1)
+    pdf.cell(0, 6, f"Neutral Messages: {neutral_count}", 0, 1)
+    
+    # Date range
+    date_range = f"{df['datetime'].min()} to {df['datetime'].max()}"
+    pdf.cell(0, 6, f"Date Range: {date_range}", 0, 1)
+    
+    # Top user
+    if unique_users > 0:
+        top_user = df[df['author'] != 'System']['author'].value_counts().idxmax()
+        pdf.cell(0, 6, f"Top Contributor: {top_user}", 0, 1)
+    
+    pdf.ln(10)
 
 def add_ai_threat_section(pdf, ai_report):
     """Add AI threat assessment section to PDF"""
@@ -2144,7 +2281,7 @@ def show_admin_panel():
         st.download_button(
             label="📥 **Download User Data (CSV)**",
             data=csv_data,
-            file_name=f"user_data_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            file_name=f"user_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
             type="secondary",
             use_container_width=True
@@ -2156,7 +2293,7 @@ def show_admin_panel():
         st.download_button(
             label="📥 **Download User Data (JSON)**",
             data=json_data,
-            file_name=f"user_database_backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            file_name=f"user_database_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             mime="application/json",
             type="secondary",
             use_container_width=True
@@ -2170,8 +2307,131 @@ def show_admin_panel():
             - Database File: `{USER_DB_FILE}`
             - Admin Users: {len([email for email in ADMIN_EMAILS if email.strip()])}
             - Current Admin: {current_admin}
-            - Server Time: {datetime.datetime.now()}
+            - Server Time: {datetime.now()}
             """)
+    
+    # API Quota Management Section
+    st.markdown("---")
+    st.markdown("### 🔑 API Quota Management")
+    
+    # Get API tracker instance
+    api_tracker = get_api_tracker()
+    quota_status = api_tracker.get_quota_status()
+    usage_history = api_tracker.get_usage_history(30)
+    warnings = api_tracker.get_usage_warnings()
+    
+    # Display quota overview
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Quota", quota_status["total_quota"])
+    with col2:
+        st.metric("Used", quota_status["used_quota"], delta=-quota_status["used_quota"])
+    with col3:
+        st.metric("Remaining", quota_status["remaining_quota"])
+    with col4:
+        st.metric("Usage %", f"{quota_status['usage_percentage']}%")
+    
+    # Quota status bar
+    st.progress(quota_status["usage_percentage"] / 100)
+    st.markdown(f"**Status:** {quota_status['quota_status']}")
+    
+    # Display warnings if any
+    if warnings:
+        for warning in warnings:
+            st.warning(warning)
+    
+    # Detailed statistics
+    with st.expander("📊 Detailed API Usage Statistics", expanded=False):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Current Usage")
+            st.metric("Daily Usage", quota_status["daily_usage"])
+            st.metric("Monthly Usage", quota_status["monthly_usage"])
+            st.metric("Total Usage", quota_status["used_quota"])
+            
+            # Success rate
+            api_stats = api_tracker.data["google_gemini_api"]["usage_stats"]
+            total_requests = api_stats["successful_requests"] + api_stats["failed_requests"]
+            if total_requests > 0:
+                success_rate = (api_stats["successful_requests"] / total_requests) * 100
+                st.metric("Success Rate", f"{success_rate:.1f}%")
+        
+        with col2:
+            st.markdown("#### Usage History (30 days)")
+            if usage_history["daily_history"]:
+                # Create usage chart
+                dates = list(usage_history["daily_history"].keys())
+                usage_counts = list(usage_history["daily_history"].values())
+                
+                import plotly.graph_objects as go
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=dates,
+                    y=usage_counts,
+                    mode='lines+markers',
+                    name='Daily Usage',
+                    line=dict(color='#667eea', width=2),
+                    marker=dict(size=6)
+                ))
+                fig.update_layout(
+                    title="API Usage Trend (30 Days)",
+                    xaxis_title="Date",
+                    yaxis_title="API Calls",
+                    height=300,
+                    margin=dict(t=50, b=50, l=50, r=50)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No usage history available yet.")
+    
+    # Admin controls
+    with st.expander("⚙️ Admin Controls", expanded=False):
+        st.markdown("#### Quota Management")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            # Update quota limit
+            new_limit = st.number_input(
+                "Update Quota Limit", 
+                min_value=100, 
+                max_value=10000, 
+                value=quota_status["total_quota"],
+                step=50,
+                help="Set new total quota limit"
+            )
+            if st.button("Update Quota Limit"):
+                if api_tracker.update_quota_limit(new_limit):
+                    st.success(f"Quota limit updated to {new_limit}")
+                    st.rerun()
+                else:
+                    st.error("Failed to update quota limit")
+        
+        with col2:
+            # Reset options
+            reset_type = st.selectbox(
+                "Reset Type",
+                ["daily", "monthly", "total"],
+                help="Choose what to reset"
+            )
+            if st.button(f"Reset {reset_type.title()} Usage", type="secondary"):
+                if api_tracker.reset_quota(reset_type):
+                    st.success(f"{reset_type.title()} usage reset successfully")
+                    st.rerun()
+                else:
+                    st.error("Failed to reset usage")
+        
+        # Export usage report
+        st.markdown("#### Usage Reports")
+        if st.button("📊 Export Usage Report"):
+            report = api_tracker.export_usage_report()
+            report_json = json.dumps(report, indent=2)
+            st.download_button(
+                label="Download Usage Report (JSON)",
+                data=report_json,
+                file_name=f"api_usage_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json"
+            )
     
     # Security notice
     st.markdown("""
@@ -2388,7 +2648,7 @@ def display_emoji_analysis_dashboard(df):
                 </div>
                 <div style='text-align: right;'>
                     <div style='font-size: 1.8rem; font-weight: bold;'>{count}</div>
-                    <div style='font-size: 0.9rem; opacity: 0.8;'>times</div>
+                    <div style='font-size: 0.9rem; color: white; opacity: 0.8;'>times</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -2948,512 +3208,3 @@ def display_user_comparison_dashboard(df):
             st.write(f"• Most active together: {len(overlap_hours)} hours per day")
         else:
             st.write("• Users are active at different times")
-
-def main():
-    load_css()
-    
-    # Check authentication status
-    if not is_user_logged_in():
-        create_login_form()
-        return
-    
-    # Show user dashboard if logged in
-    create_user_dashboard()
-    
-    # Show profile if requested
-    if st.session_state.get('show_profile', False):
-        show_user_profile()
-        return
-    
-    # Admin panel - secured access control
-    if not ADMIN_EMAILS or not any(email.strip() for email in ADMIN_EMAILS):
-        # No admin configured yet - show setup interface
-        if st.sidebar.checkbox("⚙️ Admin Setup (Owner Only)", key="admin_setup"):
-            configure_admin_access()
-            return
-    else:
-        # Admin access control
-        is_admin = is_admin_user(st.session_state.user_email)
-        if is_admin:
-            if st.sidebar.checkbox("👨‍💼 Admin Panel (View Users)", key="admin_panel"):
-                show_admin_panel()
-                return
-        elif st.sidebar.checkbox("👨‍💼 Admin Panel (Request Access)", key="admin_panel_unauthorized"):
-            st.markdown("""
-            <div style="
-                background: linear-gradient(135deg, #FF6B6B, #FF8E8E);
-                padding: 25px;
-                border-radius: 15px;
-                text-align: center;
-                margin: 20px 0;
-                box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);
-            ">
-                <div style="font-size: 3rem; margin-bottom: 15px;">🚫</div>
-                <h2 style="color: white; margin-bottom: 15px;">Access Denied</h2>
-                <p style="color: white; font-size: 1.1rem; line-height: 1.6;">
-                    Only authorized administrators can access the admin panel.<br>
-                    Contact the website owner if you need admin access.
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.info(f"👤 **Your Email:** {st.session_state.user_email}")
-            st.info("📧 **Contact the website owner** to request admin privileges for your account.")
-            return
-
-    with st.sidebar:
-        st.image(get_image_as_base64(SIDEBAR_LOGO_SVG), width=50)
-        st.header("🕵️‍♀️ Controls Panel")
-        uploaded_file = st.file_uploader(
-            "📱 Upload WhatsApp chat export (.txt file)", 
-            type=["txt"],
-            help="Upload your WhatsApp chat export file (must be .txt format)",
-            accept_multiple_files=False,
-            key="whatsapp_uploader"
-        )
-        
-    st.markdown("""<div class="title-container"><div class="main-title">WhatsApp Chat Analysis</div><div class="sub-title">Analyze sentiment, threats, and activity patterns from your chat history.</div></div>""", unsafe_allow_html=True)
-
-    if 'current_file_name' not in st.session_state:
-        st.session_state.current_file_name = None
-
-    if uploaded_file:
-        # Debug: Show upload status
-        st.success(f"✅ File '{uploaded_file.name}' uploaded successfully!")
-        st.write(f"📁 **File size:** {uploaded_file.size} bytes")
-        
-        if uploaded_file.name != st.session_state.current_file_name:
-            st.cache_data.clear()
-            st.session_state.current_file_name = uploaded_file.name
-            st.success(f"New file detected: '{uploaded_file.name}'. Running fresh analysis...")
-            time.sleep(1)
-
-        # Process uploaded file
-        try:
-            # Read file content once and store it
-            if uploaded_file is not None:
-                # Reset file pointer to beginning
-                uploaded_file.seek(0)
-                raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
-                
-                # Debug info for troubleshooting
-                st.write(f"📄 **File Info:** {uploaded_file.name} ({len(raw_text)} characters)")
-                
-                # Validate file content
-                if len(raw_text.strip()) < 50:
-                    st.error("⚠️ File seems too small. Please ensure you've uploaded a complete WhatsApp chat export.")
-                    st.info("💡 **Mobile Tip:** Make sure to export the full chat history, not just selected messages.")
-                    st.info(f"🔍 **Debug:** File has only {len(raw_text)} characters")
-                    return
-                    
-                # Check if it looks like a WhatsApp export
-                if not any(indicator in raw_text[:500] for indicator in ['-', ':', 'AM', 'PM', '/', 'WhatsApp']):
-                    st.warning("🤔 This doesn't look like a WhatsApp export. Please make sure you've exported the chat correctly.")
-                    st.info(f"🔍 **Debug:** First 200 characters: {raw_text[:200]}")
-                    
-            else:
-                st.error("No file uploaded or file is empty.")
-                return
-                
-        except Exception as e:
-            st.error(f"❌ Error reading file: {str(e)}")
-            st.info("🔧 **Troubleshooting Tips:**")
-            st.info("• Make sure the file is a .txt file")
-            st.info("• Try exporting the chat again from WhatsApp")
-            st.info("• Ensure the file isn't corrupted")
-            st.info(f"🔍 **Technical Error:** {type(e).__name__}: {str(e)}")
-            return
-        # Preprocess the chat data
-        try:
-            st.info("🔄 Processing chat data...")
-            df = preprocess_chat(raw_text)
-            st.write(f"📊 **Processing Result:** Found {len(df)} messages")
-            
-            if df.empty:
-                st.error("❌ Could not extract any messages from the file.")
-                st.info("🔧 **Possible Issues:**")
-                st.info("• File might not be a WhatsApp export")
-                st.info("• Wrong date/time format")
-                st.info("• File encoding issues")
-                st.info(f"🔍 **Raw text preview:** {raw_text[:300]}...")
-                return
-                
-            if 'datetime' not in df.columns or df['datetime'].str.strip().eq('').all():
-                st.error("❌ Could not parse datetime information from the chat.")
-                st.info(f"🔍 **Columns found:** {list(df.columns)}")
-                st.info(f"🔍 **Sample data:** {df.head()}")
-                return
-                
-        except Exception as e:
-            st.error(f"❌ Error processing chat data: {str(e)}")
-            st.info(f"🔍 **Technical Error:** {type(e).__name__}: {str(e)}")
-            st.info("🔧 **Try:** Re-exporting the chat from WhatsApp")
-            return
-
-        df['sentiment'] = df['message'].apply(analyze_sentiment)
-        df['datetime_parsed'] = pd.to_datetime(df['datetime'], errors='coerce', dayfirst=True)
-        df.dropna(subset=['datetime_parsed'], inplace=True)
-        df = df.reset_index(drop=True)
-
-        if df.empty:
-            st.error("Failed to parse dates from the chat file. The application cannot proceed.")
-            return
-
-        filtered_df = df.copy()
-
-        with st.sidebar:
-            st.markdown("---")
-            st.header("🔍 Filters")
-            
-            user_df_for_filters = filtered_df[filtered_df['author'] != 'System']
-            authors = sorted(user_df_for_filters['author'].unique()) if not user_df_for_filters.empty else []
-            selected_authors = st.multiselect("Filter by Author(s)", options=authors)
-            if selected_authors:
-                filtered_df = filtered_df[filtered_df['author'].isin(selected_authors)]
-            
-            if not filtered_df.empty:
-                min_date = filtered_df['datetime_parsed'].min().date()
-                max_date = filtered_df['datetime_parsed'].max().date()
-                
-                st.markdown("##### Filter by Date Range")
-                start_date = st.date_input("Start date", min_date, min_value=min_date, max_value=max_date)
-                end_date = st.date_input("End date", max_date, min_value=start_date, max_value=max_date)
-
-                if start_date and end_date:
-                    filtered_df = filtered_df[(filtered_df['datetime_parsed'].dt.date >= start_date) & (filtered_df['datetime_parsed'].dt.date <= end_date)]
-            else:
-                st.warning("No data for the selected author(s).")
-
-
-        if filtered_df.empty:
-            st.warning("No data matches the selected filters."); return
-        
-        user_df = filtered_df[filtered_df['author'] != 'System']
-
-        # Smart Analysis Recommendations System (SURPRISE!)
-        st.markdown("### 🧠 Intelligent Analysis Assistant")
-        
-        # Analyze chat characteristics for smart recommendations
-        total_messages = len(user_df)
-        unique_users = user_df['author'].nunique()
-        avg_msg_length = user_df['message'].str.len().mean()
-        has_negative_sentiment = (user_df['sentiment'] < -0.3).any()
-        has_concerning_keywords = user_df['message'].str.contains(
-            r'\b(threat|kill|hurt|weapon|bomb|attack|violence|hate|revenge|fight|angry|mad)\b', 
-            case=False, na=False
-        ).any()
-        
-        # Generate smart recommendation
-        recommendation_score = 0
-        if total_messages > 100: recommendation_score += 1
-        if unique_users > 5: recommendation_score += 1  
-        if avg_msg_length > 50: recommendation_score += 1
-        if has_negative_sentiment: recommendation_score += 2
-        if has_concerning_keywords: recommendation_score += 3
-        
-        # Smart recommendation display
-        col1, col2, col3 = st.columns([2, 2, 1])
-        
-        with col1:
-            if recommendation_score >= 4:
-                st.warning("🚨 **AI Analysis Recommended** - Potential security concerns detected")
-                recommended_mode = True
-            elif recommendation_score >= 2:
-                st.info("🔍 **AI Analysis Suggested** - Complex conversation patterns found")  
-                recommended_mode = True
-            else:
-                st.success("⚡ **Basic Mode Sufficient** - Simple conversation detected")
-                recommended_mode = False
-        
-        with col2:
-            enable_ai_analysis = st.checkbox(
-                "🤖 Enable AI Threat Analysis", 
-                value=recommended_mode,
-                help="Performs comprehensive AI-powered threat detection and psychological profiling. Disable for faster analysis with basic features only."
-            )
-        
-        with col3:
-            if enable_ai_analysis:
-                st.info("⏱️ ~60s", icon="🕐")
-            else:
-                st.success("⚡ Instant", icon="🚀")
-
-        # Perform AI Analysis if enabled
-        if enable_ai_analysis:
-            # Enhanced Progress Tracker (SURPRISE!)
-            st.markdown("### 🔄 AI Analysis Progress")
-            progress_container = st.container()
-            
-            with progress_container:
-                # Create progress steps
-                steps = [
-                    "🔍 Analyzing conversation context and patterns...",
-                    "🧠 Performing psychological profiling assessment...", 
-                    "⚡ Applying advanced threat detection algorithms...",
-                    "📊 Generating comprehensive security report...",
-                    "✅ Analysis complete!"
-                ]
-                
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                api_key = get_gemini_api_key()
-                if api_key:
-                    # Simulate progress steps for better UX
-                    for i, step in enumerate(steps[:-1]):
-                        status_text.text(step)
-                        progress_bar.progress((i + 1) * 20)
-                        if i == 0:
-                            time.sleep(0.5)  # Quick context analysis
-                        elif i == 1:
-                            time.sleep(1.0)   # Profiling takes longer
-                        else:
-                            time.sleep(0.3)   # Other steps
-                    
-                    # Actual AI analysis
-                    status_text.text("🤖 Consulting AI security expert...")
-                    progress_bar.progress(90)
-                    
-                    ai_threat_report = analyze_chat_for_threats_holistically(user_df, api_key)
-                    num_ai_threats = ai_threat_report.count("<threat>")
-                    
-                    # Complete
-                    status_text.text(steps[-1])
-                    progress_bar.progress(100)
-                    time.sleep(0.5)
-                    
-                    # Clear progress after completion
-                    progress_container.empty()
-                    st.success(f"🎯 **AI Analysis Complete!** {num_ai_threats} potential threats identified")
-                    
-                else:
-                    progress_container.empty()
-                    st.warning("⚠️ **Gemini API Key not configured!** Threat detection is disabled.")
-                    st.info("To enable AI threat detection:\n1. Get API key from [Google AI Studio](https://makersuite.google.com/app/apikey)\n2. Add it to `.gemini_api_key` file")
-                    ai_threat_report = "API Key is required for threat analysis. The chat analysis will continue without threat detection."
-                    num_ai_threats = 0
-        else:
-            # Basic analysis without AI
-            st.success("✅ **Basic Analysis Mode** - AI threat analysis disabled. Using standard analysis features only.")
-            ai_threat_report = """🔍 **Basic Analysis Mode Active**
-
-AI threat analysis has been disabled by user preference. The platform is running in basic mode with the following features available:
-
-✅ **Available Features:**
-• 📊 Chat Dashboard - Message statistics and sentiment analysis
-• 😊 Emoji Analysis - Comprehensive emoji usage patterns  
-• 👥 User Comparison - Side-by-side participant analysis
-• ☁️ Word Cloud - Visual word frequency analysis
-• 👤 User Deep Dive - Individual participant insights
-• 📄 Raw Data - Complete chat data access
-• 📋 PDF Reports - Customizable report generation
-
-⚡ **Benefits of Basic Mode:**
-• Faster analysis processing
-• No external API dependencies
-• Immediate results
-• Full privacy (no data sent to external services)
-
-💡 **To enable AI analysis:** Check the "Enable AI Threat Analysis" option above for comprehensive psychological profiling and advanced threat detection."""
-            num_ai_threats = 0
-
-        with st.sidebar:
-            st.header("📊 Chat Metrics & Analysis Report")
-            
-            # Enhanced Analysis Mode Indicator (SURPRISE!)
-            if enable_ai_analysis:
-                st.success("🤖 **AI Analysis Mode** - Advanced threat detection enabled")
-                with st.expander("🔍 AI Analysis Details", expanded=False):
-                    st.write("**Features Active:**")
-                    st.write("• 🧠 Psychological profiling")  
-                    st.write("• 🚨 Threat pattern recognition")
-                    st.write("• 📈 Behavioral analysis")
-                    st.write("• 🔄 Context understanding")
-                    st.write("• ⚡ Risk stratification")
-            else:
-                st.info("⚡ **Basic Mode** - Lightning-fast analysis")
-                with st.expander("🚀 Basic Mode Benefits", expanded=False):
-                    st.write("**Performance Benefits:**") 
-                    st.write("• ⚡ Instant results (< 1 second)")
-                    st.write("• 🔒 100% privacy (no external calls)")
-                    st.write("• 💾 Lower resource usage")
-                    st.write("• 🌐 Works offline")
-                    st.write("• 🔋 Battery efficient")
-            
-            if not user_df.empty:
-                st.markdown("---")
-                st.subheader("📈 Key Metrics")
-                
-                top_sender = user_df['author'].value_counts().idxmax()
-                avg_sent = user_df['sentiment'].mean()
-                
-                # Enhanced metrics with icons and colors
-                metric_card("💬", "Messages", f"{len(user_df):,}")
-                
-                # Threat metric with dynamic color
-                if num_ai_threats > 0:
-                    st.markdown(f"""
-                    <div style="background: linear-gradient(90deg, #ff4444, #ff6666); padding: 10px; border-radius: 5px; margin: 5px 0;">
-                        <div style="color: white; font-weight: bold;">🚨 Threats: {num_ai_threats}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div style="background: linear-gradient(90deg, #44ff44, #66ff66); padding: 10px; border-radius: 5px; margin: 5px 0;">
-                        <div style="color: white; font-weight: bold;">✅ Threats: {num_ai_threats}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                metric_card("👑", "Top User", top_sender)
-                
-                # Sentiment with color coding
-                if avg_sent > 0.1:
-                    sentiment_color = "#44ff44"
-                    sentiment_icon = "😊"
-                elif avg_sent < -0.1:
-                    sentiment_color = "#ff4444" 
-                    sentiment_icon = "😟"
-                else:
-                    sentiment_color = "#ffaa44"
-                    sentiment_icon = "😐"
-                    
-                st.markdown(f"""
-                <div style="background: linear-gradient(90deg, {sentiment_color}, {sentiment_color}88); padding: 10px; border-radius: 5px; margin: 5px 0;">
-                    <div style="color: white; font-weight: bold;">{sentiment_icon} Sentiment: {avg_sent:.2f}</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.markdown("---")
-                
-                # Add PDF customization UI
-                selected_sections, user_selections = create_pdf_customization_ui()
-                
-                # Generate PDF with custom sections
-                selected_count = sum(selected_sections.values()) + sum([
-                    user_selections.get('emoji_analysis', False),
-                    user_selections.get('detailed_stats', False)
-                ])
-                
-                if selected_count > 0:
-                    with st.spinner("Generating Customized PDF Report..."):
-                        insights_for_pdf = f"Overall Sentiment: {'Positive' if avg_sent > 0.05 else 'Negative' if avg_sent < -0.05 else 'Neutral'} (Avg. Score: {avg_sent:.2f})\nTop Contributor: {top_sender}\nPeak Activity: Around {user_df['datetime_parsed'].dt.hour.value_counts().idxmax()}:00"
-                        
-                        # Use the new modular PDF generation
-                        pdf_bytes = generate_modular_pdf_report(
-                            filtered_df, 
-                            ai_threat_report, 
-                            insights_for_pdf,
-                            selected_sections,
-                            user_selections
-                        )
-                        
-                        # Custom filename based on selections
-                        section_names = [name for name, selected in selected_sections.items() if selected]
-                        if user_selections.get('emoji_analysis', False):
-                            section_names.append('emoji')
-                        if user_selections.get('detailed_stats', False):
-                            section_names.append('stats')
-                        
-                        filename = f"whatsapp_report_{len(section_names)}sections.pdf"
-                        
-                        st.download_button(
-                            "📄 Download Customized Report (PDF)", 
-                            data=pdf_bytes, 
-                            file_name=filename, 
-                            mime="application/pdf",
-                            help=f"Download PDF with {selected_count} selected sections"
-                        )
-                else:
-                    st.warning("⚠️ Please select at least one section to generate PDF report")
-            else:
-                metric_card("💬", "Messages", "0")
-                metric_card("🚨", "Threats", "0")
-
-        display_key_insights(filtered_df)
-        
-        # Enhanced Sentiment Scale Display
-        if not user_df.empty:
-            st.markdown("---")
-            # Calculate sentiment counts for the scale
-            positive_count = len(user_df[user_df['sentiment'] > 0.05])
-            negative_count = len(user_df[user_df['sentiment'] < -0.05])
-            neutral_count = len(user_df[(user_df['sentiment'] >= -0.05) & (user_df['sentiment'] <= 0.05)])
-            
-            # Display the beautiful sentiment scale
-            create_sentiment_scale_visualization(positive_count, negative_count, neutral_count, user_df)
-            
-            # Add conversation health score as a surprise feature
-            health_score = calculate_conversation_health(user_df)
-            st.markdown(f"""
-            <div style="
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                padding: 20px;
-                border-radius: 15px;
-                margin: 20px 0;
-                text-align: center;
-                box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-                animation: pulse 3s ease-in-out infinite;
-            ">
-                <h3 style="color: white; margin-bottom: 10px;">🎯 Conversation Health Score</h3>
-                <div style="
-                    font-size: 2.5rem;
-                    font-weight: bold;
-                    color: white;
-                    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-                ">{health_score}/100</div>
-                <p style="color: rgba(255,255,255,0.9); margin-top: 10px;">
-                    {get_health_message(health_score)}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        tab_list = ["🤖 AI Analysis", "📊 Dashboard", "😊 Emoji Analysis", "👥 User vs User", "☁️ Word Cloud", "👤 User Deep Dive", "📄 Raw Data"]
-        tab_ai, tab_dashboard, tab_emoji, tab_comparison, tab_wordcloud, tab_user_dive, tab_raw_data = st.tabs(tab_list)
-        
-        with tab_ai:
-            display_ai_threat_report(ai_threat_report, user_df['message'].tolist())
-        with tab_dashboard: display_dashboard(filtered_df)
-        with tab_emoji: display_emoji_analysis_dashboard(filtered_df)
-        with tab_comparison: display_user_comparison_dashboard(filtered_df)
-        with tab_wordcloud: display_word_cloud(filtered_df)
-        with tab_user_dive: display_user_deepdive(filtered_df)
-        with tab_raw_data:
-            st.subheader("Filtered Chat Data")
-            st.dataframe(filtered_df.head(200), use_container_width=True)
-    else:
-        st.info("📱 **Welcome!** Upload your WhatsApp chat export using the sidebar to begin analysis.", icon="👋")
-        
-        # Mobile-friendly instructions
-        with st.expander("📱 How to Export WhatsApp Chat on Mobile", expanded=False):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("📱 Android/iPhone")
-                st.write("1. Open WhatsApp chat")
-                st.write("2. Tap the 3 dots (⋮) or contact name")
-                st.write("3. Select **'Export chat'**")
-                st.write("4. Choose **'Without media'**")
-                st.write("5. Save/share the .txt file")
-                st.write("6. Upload the file here ⬅️")
-            
-            with col2:
-                st.subheader("📂 File Formats Supported")
-                st.write("✅ **.txt** (most common)")
-                st.write("✅ **.zip** (iOS exports)")
-                st.write("✅ **.csv** (some exports)")
-                st.write("⚠️ File must be < 200MB")
-                st.write("� If issues persist, try exporting again")
-        st.markdown("---")
-        st.subheader("How It Works")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown("<div class='metric-card'><div class='metric-card-icon'>📤</div><div class='metric-card-label'>Step 1</div><div class='metric-card-value' style='font-size:1.2rem;'>Upload File</div></div>", unsafe_allow_html=True)
-        with col2:
-            st.markdown("<div class='metric-card'><div class='metric-card-icon'>🔬</div><div class='metric-card-label'>Step 2</div><div class='metric-card-value' style='font-size:1.2rem;'>Analyze Data</div></div>", unsafe_allow_html=True)
-        with col3:
-            st.markdown("<div class='metric-card'><div class='metric-card-icon'>📈</div><div class='metric-card-label'>Step 3</div><div class='metric-card-value' style='font-size:1.2rem;'>Explore Insights</div></div>", unsafe_allow_html=True)
-
-    st.markdown('<div class="footer">Built with ❤️ using Streamlit & Python</div>', unsafe_allow_html=True)
-
-if __name__ == "__main__":
-    main()

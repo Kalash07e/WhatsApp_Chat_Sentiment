@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://rvjr7jwntmp4t.streamlit.app/sitemap.xml
+
+# Additional information
+# This is a WhatsApp Chat Sentiment Analysis tool
+# Powered by AI for emotion detection and threat assessment

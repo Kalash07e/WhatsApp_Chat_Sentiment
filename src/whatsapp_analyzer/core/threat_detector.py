@@ -26,13 +26,20 @@ class ThreatDetector:
         """Initialize the AI model if API key is available."""
         if not GENAI_AVAILABLE:
             raise ImportError("google.generativeai is not available. Install it with: pip install google-generativeai")
-        
+
         if self.api_key:
             try:
                 genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                self.model = genai.GenerativeModel('gemini-2.0-flash')
             except Exception as e:
-                raise RuntimeError(f"Failed to initialize AI model: {str(e)}")
+                if "invalid" in str(e).lower():
+                    raise RuntimeError("Failed to initialize AI model: Invalid API key provided.")
+                elif "quota" in str(e).lower():
+                    raise RuntimeError("Failed to initialize AI model: API quota exceeded.")
+                else:
+                    raise RuntimeError(f"Failed to initialize AI model: {str(e)}")
+        else:
+            raise RuntimeError("API key is missing. Please provide a valid API key.")
     
     def analyze_threats(self, messages_df) -> ThreatAnalysisResult:
         """
@@ -51,13 +58,32 @@ class ThreatDetector:
             # Prepare chat text for analysis
             chat_text = self._prepare_chat_text(messages_df)
             
-            # Generate AI analysis
+                        # Generate AI analysis
             analysis_text = self._generate_threat_analysis(chat_text)
             
-            # Parse the analysis results
+            # DEBUG: Log the raw AI response
+            import streamlit as st
+            try:
+                with st.expander("🔍 DEBUG: View Raw AI Response", expanded=True):
+                    st.success("✅ AI Analysis completed successfully!")
+                    st.code(analysis_text, language="text")
+                    st.write("**Looking for tags:** `<threat>`, `<summary>`, `<severity>`, `<messages>`")
+            except:
+                pass  # If not in Streamlit context, skip
+            
+            # Parse and return results
             return self._parse_analysis_results(analysis_text)
             
         except Exception as e:
+            # Show error prominently
+            import streamlit as st
+            try:
+                st.error(f"🚨 **Threat Analysis Error:** {str(e)}")
+                import traceback
+                with st.expander("🐛 Full Error Details"):
+                    st.code(traceback.format_exc())
+            except:
+                pass
             return self._create_error_result(f"Analysis failed: {str(e)}")
     
     def _prepare_chat_text(self, messages_df) -> str:
